@@ -1,0 +1,28 @@
+[package]
+name        = "flywheelmc-players"
+version     = "0.1.0"
+authors     = ["FlywheelMC <https://github.com/FlywheelMC>"]
+description = "FlywheelMC server player management"
+license     = "LGPL-3.0-only"
+
+readme     = "README.md"
+homepage   = "https://github.com/FlywheelMC"
+repository = "https://github.com/FlywheelMC/flywheelmc-players"
+publish    = false
+
+keywords   = [ "flywheel", "mc", "minecraft", "game" ]
+categories = [ "authentication", "network-programming" ]
+
+edition      = "2024"
+rust-version = "1.87"
+
+
+[lints.rust]
+unused_parens = "allow"
+
+
+[dependencies.flywheelmc-common]
+path = "../flywheelmc-common"
+
+[dependencies.voxidian-protocol]
+path = "../voxidian-protocol"
