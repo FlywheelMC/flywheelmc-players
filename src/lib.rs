@@ -8,6 +8,7 @@ use voxidian_protocol::packet::s2c::config::RegistryDataS2CConfigPacket;
 use voxidian_protocol::packet::processing::PacketProcessing;
 use voxidian_protocol::value::{ DimType, Identifier, Text, TextComponent, EntityType };
 use voxidian_protocol::registry::Registry;
+pub use voxidian_protocol::{ MINECRAFT_VERSION, PROTOCOL_VERSION };
 
 
 mod conn;
@@ -19,10 +20,12 @@ pub use player::{ Player, PlayerJoined, PlayerLeft };
 pub struct FlywheelMcPlayersPlugin {
     pub listen_addrs       : SocketAddrs,
     pub motd               : Text,
+    pub version            : Cow<'static, str>,
+    pub favicon            : Cow<'static, str>,
     pub compress_threshold : usize,
     pub mojauth_enabled    : bool,
-    pub server_id          : String,
-    pub server_brand       : String,
+    pub server_id          : Cow<'static, str>,
+    pub server_brand       : Cow<'static, str>,
     pub default_dim_id     : Identifier,
     pub default_dim_type   : DimType,
     pub max_view_distance  : u8
@@ -35,6 +38,8 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_event::<player::PlayerLeft>()
             .insert_resource(ListenAddrs(self.listen_addrs.clone()))
             .insert_resource(ServerMotd(self.motd.clone()))
+            .insert_resource(ServerVersion(self.version.clone()))
+            .insert_resource(ServerFavicon(self.favicon.clone()))
             .insert_resource(CompressionThreshold(self.compress_threshold))
             .insert_resource(MojauthEnabled(self.mojauth_enabled))
             .insert_resource(ServerId(self.server_id.clone()))
@@ -63,16 +68,22 @@ struct ListenAddrs(SocketAddrs);
 struct ServerMotd(Text);
 
 #[derive(Resource)]
+struct ServerVersion(Cow<'static, str>);
+
+#[derive(Resource)]
+struct ServerFavicon(Cow<'static, str>);
+
+#[derive(Resource)]
 struct CompressionThreshold(usize);
 
 #[derive(Resource)]
 struct MojauthEnabled(bool);
 
 #[derive(Resource)]
-struct ServerId(String);
+struct ServerId(Cow<'static, str>);
 
 #[derive(Resource)]
-struct ServerBrand(String);
+struct ServerBrand(Cow<'static, str>);
 
 #[derive(Resource)]
 struct DefaultDim(Identifier, DimType);

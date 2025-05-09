@@ -110,7 +110,7 @@ pub(crate) fn handle_state(
                     let (private_key, public_key) = generate_key_pair::<1024>();
                     let verify_token              = array::from_fn::<_, 4, _>(|_| rand::random::<u8>());
                     conn_stream.send_packet(&mut cmds, HelloS2CLoginPacket {
-                        server_id    : r_server_id.0.clone(),
+                        server_id    : r_server_id.0.to_string(),
                         public_key   : public_key.der_bytes().into(),
                         verify_token : verify_token.to_vec().into(),
                         should_auth  : r_mojauth.0
