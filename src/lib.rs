@@ -13,6 +13,7 @@ use voxidian_protocol::registry::Registry;
 mod conn;
 
 mod player;
+pub use player::{ Player, PlayerJoined, PlayerLeft };
 
 
 pub struct FlywheelMcPlayersPlugin {
@@ -30,6 +31,8 @@ pub struct FlywheelMcPlayersPlugin {
 impl Plugin for FlywheelMcPlayersPlugin {
     fn build(&self, app : &mut App) {
         app
+            .add_event::<player::PlayerJoined>()
+            .add_event::<player::PlayerLeft>()
             .insert_resource(ListenAddrs(self.listen_addrs.clone()))
             .insert_resource(ServerMotd(self.motd.clone()))
             .insert_resource(CompressionThreshold(self.compress_threshold))

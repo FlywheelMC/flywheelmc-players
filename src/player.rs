@@ -8,6 +8,13 @@ pub struct Player {
     pub(crate) username : String,
     pub(crate) props    : Vec<MojAuthProperty>
 }
+impl Player {
+
+    pub fn uuid(&self) -> Uuid { self.uuid }
+
+    pub fn username(&self) -> &str { &self.username }
+
+}
 
 
 #[derive(Event)]
