@@ -1,4 +1,4 @@
-use crate::player::world::BLOCK_AIR;
+use crate::world::BLOCK_AIR;
 use flywheelmc_common::prelude::*;
 use protocol::value::{ Var32, BlockState };
 use protocol::registry::RegEntry;

@@ -17,6 +17,9 @@ pub(crate) mod login;
 pub(crate) mod config;
 pub(crate) mod play;
 
+pub(crate) mod packet;
+pub use packet::{ PacketReadEvent, IncomingPacket };
+
 
 #[derive(Component)]
 pub(crate) struct Connection {
@@ -30,6 +33,7 @@ pub(crate) struct ConnStream {
     pub(crate) write_stream : Arc<Mutex<OwnedWriteHalf>>,
     pub(crate) data_queue   : VecDeque<u8>,
     pub(crate) packet_proc  : PacketProcessing,
+    pub(crate) packet_index : u128,
     pub(crate) shutdown     : Arc<AtomicBool>
 }
 

@@ -1,5 +1,7 @@
 #![feature(
-    let_chains
+    let_chains,
+    auto_traits,
+    negative_impls
 )]
 
 
@@ -12,9 +14,12 @@ pub use protocol::{ MINECRAFT_VERSION, PROTOCOL_VERSION };
 
 
 mod conn;
+pub use conn::packet::{ PacketReadEvent, IncomingPacket };
 
 mod player;
 pub use player::{ Player, PlayerJoined, PlayerLeft };
+
+mod world;
 
 
 pub struct FlywheelMcPlayersPlugin {
@@ -28,12 +33,13 @@ pub struct FlywheelMcPlayersPlugin {
     pub server_brand       : Cow<'static, str>,
     pub default_dim_id     : Identifier,
     pub default_dim_type   : DimType,
-    pub max_view_distance  : u8
+    pub max_view_distance  : NonZeroU8
 }
 
 impl Plugin for FlywheelMcPlayersPlugin {
     fn build(&self, app : &mut App) {
         app
+            .add_event::<conn::packet::PacketReadEvent>()
             .add_event::<player::PlayerJoined>()
             .add_event::<player::PlayerLeft>()
             .insert_resource(ListenAddrs(self.listen_addrs.clone()))
@@ -45,7 +51,7 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .insert_resource(ServerId(self.server_id.clone()))
             .insert_resource(ServerBrand(self.server_brand.clone()))
             .insert_resource(DefaultDim(self.default_dim_id.clone(), self.default_dim_type.clone()))
-            .insert_resource(MaxViewDistance(self.max_view_distance as usize))
+            .insert_resource(MaxViewDistance(self.max_view_distance))
             .insert_resource(LobbyYSections(self.default_dim_type.height / 16))
             .insert_resource(Registries::default())
             .insert_resource(RegistryPackets::new(&self.default_dim_id, &self.default_dim_type))
@@ -56,6 +62,7 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_systems(Update, conn::handshake::handle_state)
             .add_systems(Update, conn::status::handle_state)
             .add_systems(Update, conn::login::handle_state)
+            .add_systems(Update, world::update_view_distance)
         ;
     }
 }
@@ -89,7 +96,7 @@ struct ServerBrand(Cow<'static, str>);
 struct DefaultDim(Identifier, DimType);
 
 #[derive(Resource)]
-struct MaxViewDistance(usize);
+struct MaxViewDistance(NonZeroU8);
 
 #[derive(Resource)]
 struct LobbyYSections(u32);
@@ -179,6 +186,7 @@ async fn run_listener(
                 write_stream : Arc::new(Mutex::new(write_stream)),
                 data_queue   : VecDeque::new(),
                 packet_proc  : PacketProcessing::NONE,
+                packet_index : 0,
                 shutdown
             },
             conn::ConnKeepalive::Sending { send_at : Instant::now() },

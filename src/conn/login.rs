@@ -9,8 +9,9 @@ use crate::{
     RegistryPackets
 };
 use crate::player::{ Player, PlayerJoined };
-use crate::conn::ConnStream;
+use crate::conn::{ ConnStream, PacketReadEvent, IncomingPacket };
 use crate::conn::play::ConnStatePlay;
+use crate::world;
 use flywheelmc_common::prelude::*;
 use protocol::value::{
     Identifier,
@@ -91,7 +92,8 @@ pub(crate) fn handle_state(
         r_view_dist    : Res<MaxViewDistance>,
         r_regs         : Res<Registries>,
         r_reg_packets  : Res<RegistryPackets>,
-    mut ew_joined      : EventWriter<PlayerJoined>
+    mut ew_joined      : EventWriter<PlayerJoined>,
+    mut ew_packet      : EventWriter<PacketReadEvent>
 ) {
     for (entity, mut conn_stream, mut state) in &mut q_conn_streams {
         match (&mut*state) {
@@ -219,70 +221,84 @@ pub(crate) fn handle_state(
                     }
 
                     // Complete config
+                    cmds.entity(entity).insert((
+                        Player {
+                            uuid     : *uuid,
+                            username : mem::replace(username, String::new()),
+                            props    : mem::replace(props, Vec::new())
+                        },
+                        world::ChunkCentre(Dirty::new_dirty(Vec2::<i32>::ZERO)),
+                        world::ViewDistance(Ordered::new(NonZeroU8::MIN))
+                    ));
+
                     conn_stream.send_packet(&mut cmds, FinishConfigurationS2CConfigPacket);
                     *state = ConnStateLogin::FinishingConfig {
                         uuid     : *uuid,
                         username : mem::replace(username, String::new()),
                         props    : mem::replace(props, Vec::new())
-                    };
+                    }
+
                 }
             },
 
 
             ConnStateLogin::FinishingConfig { uuid, username, props } => {
-                if let Some(C2SConfigPackets::FinishConfiguration(_)) = conn_stream.read_packet() {
-                    // TODO: Log info
+                if let Some(packet) = conn_stream.read_packet() {
+                    if let C2SConfigPackets::FinishConfiguration(_) = packet {
+                        // TODO: Log info
 
-                    cmds.entity(entity)
-                        .remove::<ConnStateLogin>()
-                        .insert((
-                            ConnStatePlay,
-                            Player {
-                                uuid     : *uuid,
-                                username : mem::replace(username, String::new()),
-                                props    : mem::replace(props, Vec::new())
-                            }
-                        ));
-                    ew_joined.write(PlayerJoined(entity));
-                    drop((username, props,));
+                        cmds.entity(entity)
+                            .remove::<ConnStateLogin>()
+                            .insert(ConnStatePlay);
+                        ew_joined.write(PlayerJoined(entity));
+                        drop((username, props,));
 
-                    conn_stream.send_packet(&mut cmds, LoginS2CPlayPacket {
-                        entity               : 1.into(),
-                        hardcore             : false,
-                        dims                 : vec![ r_default_dim.0.clone() ].into(),
-                        max_players          : 0.into(),
-                        view_dist            : r_view_dist.0.into(),
-                        sim_dist             : r_view_dist.0.into(),
-                        reduced_debug        : false,
-                        respawn_screen       : false,
-                        limited_crafting     : true,
-                        dim                  : unsafe { RegEntry::new_unchecked(0) },
-                        dim_name             : r_default_dim.0.clone(),
-                        seed                 : 0,
-                        gamemode             : Gamemode::Adventure,
-                        old_gamemode         : Gamemode::None,
-                        is_debug             : false,
-                        is_flat              : false,
-                        death_loc            : None,
-                        portal_cooldown      : 0.into(),
-                        sea_level            : 0.into(),
-                        enforce_chat_reports : false
-                    });
-                    conn_stream.send_packet(&mut cmds, AddEntityS2CPlayPacket {
-                        id       : 1.into(),
-                        uuid     : *uuid,
-                        kind     : r_regs.entity_type.get_entry(&Identifier::vanilla_const("player")).unwrap(),
-                        x        : 0.0,
-                        y        : 0.0,
-                        z        : 0.0,
-                        pitch    : Angle::of_frac(0.0),
-                        yaw      : Angle::of_frac(0.0),
-                        head_yaw : Angle::of_frac(0.0),
-                        data     : 0.into(),
-                        vel_x    : 0,
-                        vel_y    : 0,
-                        vel_z    : 0
-                    });
+                        let view_dist = (r_view_dist.0.get() as usize).into();
+                        conn_stream.send_packet(&mut cmds, LoginS2CPlayPacket {
+                            entity               : 1.into(),
+                            hardcore             : false,
+                            dims                 : vec![ r_default_dim.0.clone() ].into(),
+                            max_players          : 0.into(),
+                            view_dist,
+                            sim_dist             : view_dist,
+                            reduced_debug        : false,
+                            respawn_screen       : false,
+                            limited_crafting     : true,
+                            dim                  : unsafe { RegEntry::new_unchecked(0) },
+                            dim_name             : r_default_dim.0.clone(),
+                            seed                 : 0,
+                            gamemode             : Gamemode::Adventure,
+                            old_gamemode         : Gamemode::None,
+                            is_debug             : false,
+                            is_flat              : false,
+                            death_loc            : None,
+                            portal_cooldown      : 0.into(),
+                            sea_level            : 0.into(),
+                            enforce_chat_reports : false
+                        });
+                        conn_stream.send_packet(&mut cmds, AddEntityS2CPlayPacket {
+                            id       : 1.into(),
+                            uuid     : *uuid,
+                            kind     : r_regs.entity_type.get_entry(&Identifier::vanilla_const("player")).unwrap(),
+                            x        : 0.0,
+                            y        : 0.0,
+                            z        : 0.0,
+                            pitch    : Angle::of_frac(0.0),
+                            yaw      : Angle::of_frac(0.0),
+                            head_yaw : Angle::of_frac(0.0),
+                            data     : 0.into(),
+                            vel_x    : 0,
+                            vel_y    : 0,
+                            vel_z    : 0
+                        });
+
+                    } else {
+                        ew_packet.write(PacketReadEvent {
+                            entity,
+                            packet : packet.into(),
+                            index  : conn_stream.packet_index.increment()
+                        });
+                    }
                 }
             },
 

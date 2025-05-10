@@ -2,9 +2,6 @@ use flywheelmc_common::prelude::*;
 use protocol::mojang::auth_verify::MojAuthProperty;
 
 
-mod world;
-
-
 #[derive(Component)]
 pub struct Player {
     pub(crate) uuid     : Uuid,
