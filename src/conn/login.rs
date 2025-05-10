@@ -12,40 +12,40 @@ use crate::player::{ Player, PlayerJoined };
 use crate::conn::ConnStream;
 use crate::conn::play::ConnStatePlay;
 use flywheelmc_common::prelude::*;
-use voxidian_protocol::value::{
+use protocol::value::{
     Identifier,
     Angle
 };
-use voxidian_protocol::packet::PacketWriter;
-use voxidian_protocol::packet::c2s::login::{
+use protocol::packet::PacketWriter;
+use protocol::packet::c2s::login::{
     C2SLoginPackets,
     HelloC2SLoginPacket
 };
-use voxidian_protocol::packet::c2s::config::C2SConfigPackets;
-use voxidian_protocol::packet::s2c::login::{
+use protocol::packet::c2s::config::C2SConfigPackets;
+use protocol::packet::s2c::login::{
     LoginCompressionS2CLoginPacket,
     HelloS2CLoginPacket,
     LoginFinishedS2CLoginPacket
 };
-use voxidian_protocol::packet::s2c::config::{
+use protocol::packet::s2c::config::{
     CustomPayloadS2CConfigPacket,
     SelectKnownPacksS2CConfigPacket,
     FinishConfigurationS2CConfigPacket
 };
-use voxidian_protocol::packet::s2c::play::{
+use protocol::packet::s2c::play::{
     LoginS2CPlayPacket,
     AddEntityS2CPlayPacket,
     Gamemode
 };
-use voxidian_protocol::packet::processing::{
+use protocol::packet::processing::{
     CompressionMode,
     generate_key_pair,
     PrivateKey,
     PublicKey,
     SecretCipher,
 };
-use voxidian_protocol::registry::RegEntry;
-use voxidian_protocol::mojang::auth_verify::{
+use protocol::registry::RegEntry;
+use protocol::mojang::auth_verify::{
     MojAuth,
     MojAuthProperty,
     MojAuthError
@@ -127,7 +127,7 @@ pub(crate) fn handle_state(
 
             ConnStateLogin::ExchangingKeys { username, private_key, public_key, verify_token } => {
                 if let Some(C2SLoginPackets::Key(packet)) = conn_stream.read_packet() {
-                    
+
                     // Check the verify token.
                     if let Ok(decrypted_verify_token) = private_key.decrypt(packet.verify_token.as_slice())
                         && (decrypted_verify_token == verify_token.as_slice()) {
@@ -136,7 +136,7 @@ pub(crate) fn handle_state(
                         conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
                         continue;
                     }
-                    
+
                     // Decrypt the secret key and construct a cipher.
                     let Ok(secret_key) = private_key.decrypt(packet.secret_key.as_slice()) else {
                         // TODO: Log warning

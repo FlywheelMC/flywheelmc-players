@@ -23,6 +23,3 @@ unused_parens = "allow"
 
 [dependencies.flywheelmc-common]
 path = "../flywheelmc-common"
-
-[dependencies.voxidian-protocol]
-path = "../voxidian-protocol"

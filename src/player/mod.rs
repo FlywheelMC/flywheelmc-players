@@ -1,5 +1,8 @@
 use flywheelmc_common::prelude::*;
-use voxidian_protocol::mojang::auth_verify::MojAuthProperty;
+use protocol::mojang::auth_verify::MojAuthProperty;
+
+
+mod world;
 
 
 #[derive(Component)]

@@ -3,7 +3,7 @@ use crate::player::{
     PlayerLeft
 };
 use flywheelmc_common::prelude::*;
-use voxidian_protocol::packet::{
+use protocol::packet::{
     DecodeError,
     PacketReader, PacketWriter,
     PrefixedPacketDecode, PrefixedPacketEncode,

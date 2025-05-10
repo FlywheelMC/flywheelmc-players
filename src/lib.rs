@@ -4,11 +4,11 @@
 
 
 use flywheelmc_common::prelude::*;
-use voxidian_protocol::packet::s2c::config::RegistryDataS2CConfigPacket;
-use voxidian_protocol::packet::processing::PacketProcessing;
-use voxidian_protocol::value::{ DimType, Identifier, Text, TextComponent, EntityType };
-use voxidian_protocol::registry::Registry;
-pub use voxidian_protocol::{ MINECRAFT_VERSION, PROTOCOL_VERSION };
+use protocol::packet::s2c::config::RegistryDataS2CConfigPacket;
+use protocol::packet::processing::PacketProcessing;
+use protocol::value::{ DimType, Identifier, Text, TextComponent, EntityType };
+use protocol::registry::Registry;
+pub use protocol::{ MINECRAFT_VERSION, PROTOCOL_VERSION };
 
 
 mod conn;
@@ -108,8 +108,8 @@ impl Default for Registries {
 struct RegistryPackets(Vec<RegistryDataS2CConfigPacket>);
 impl RegistryPackets {
     fn new(default_dim_id : &Identifier, default_dim_type : &DimType) -> Self {
-        use voxidian_protocol::registry::Registry;
-        use voxidian_protocol::value::{
+        use protocol::registry::Registry;
+        use protocol::value::{
             DamageType,
             Biome,
             WolfVariant,

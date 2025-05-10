@@ -5,13 +5,13 @@ use crate::{
 };
 use crate::conn::ConnStream;
 use flywheelmc_common::prelude::*;
-use voxidian_protocol::PROTOCOL_VERSION;
-use voxidian_protocol::packet::c2s::status::{
+use protocol::PROTOCOL_VERSION;
+use protocol::packet::c2s::status::{
     C2SStatusPackets,
     StatusRequestC2SStatusPacket,
     PingRequestC2SStatusPacket
 };
-use voxidian_protocol::packet::s2c::status::{
+use protocol::packet::s2c::status::{
     StatusResponse,
     StatusResponseVersion,
     PongResponseS2CStatusPacket

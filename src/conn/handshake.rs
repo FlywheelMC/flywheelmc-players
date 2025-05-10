@@ -2,7 +2,7 @@ use crate::conn::ConnStream;
 use crate::conn::status::ConnStateStatus;
 use crate::conn::login::ConnStateLogin;
 use flywheelmc_common::prelude::*;
-use voxidian_protocol::packet::c2s::handshake::{
+use protocol::packet::c2s::handshake::{
     IntentionC2SHandshakePacket,
     IntendedStage
 };
