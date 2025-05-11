@@ -14,7 +14,7 @@ pub use protocol::{ MINECRAFT_VERSION, PROTOCOL_VERSION };
 
 
 mod conn;
-pub use conn::packet::{ PacketReadEvent, IncomingPacket };
+pub use conn::packet::{ PacketReadEvent, Packet };
 
 mod player;
 pub use player::{ Player, PlayerJoined, PlayerLeft };
@@ -175,6 +175,7 @@ async fn run_listener(
         let (stream, peer_addr,) = listener.accept().await?;
         println!("Connected {}", peer_addr);
         let (read_stream, write_stream,) = stream.into_split();
+        let (write_sender, write_reciever,) = mpsc::unbounded_channel();
         let shutdown = Arc::new(AtomicBool::new(false));
         AsyncWorld.spawn_bundle((
             conn::Connection {
@@ -183,7 +184,15 @@ async fn run_listener(
             },
             conn::ConnStream {
                 read_stream,
-                write_stream : Arc::new(Mutex::new(write_stream)),
+                write_sender,
+                writer_task  : ManuallyDrop::new(AsyncWorld.spawn_task(
+                    conn::packet::run_packet_writer(
+                        write_reciever,
+                        write_stream,
+                        Arc::clone(&shutdown),
+                        Duration::from_millis(250)
+                    )
+                )),
                 data_queue   : VecDeque::new(),
                 packet_proc  : PacketProcessing::NONE,
                 packet_index : 0,

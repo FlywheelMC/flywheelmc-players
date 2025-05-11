@@ -6,8 +6,13 @@ use flywheelmc_common::prelude::*;
 use protocol::packet::{
     DecodeError,
     PacketReader, PacketWriter,
-    PrefixedPacketDecode, PrefixedPacketEncode,
+    PrefixedPacketDecode, PrefixedPacketEncode, PacketMeta,
+    EncodeError,
     processing::PacketProcessing
+};
+use protocol::packet::{
+    BoundC2S, BoundS2C,
+    StageStatus, StageLogin, StageConfig, StagePlay
 };
 
 
@@ -18,7 +23,8 @@ pub(crate) mod config;
 pub(crate) mod play;
 
 pub(crate) mod packet;
-pub use packet::{ PacketReadEvent, IncomingPacket };
+pub use packet::{ PacketReadEvent, Packet };
+pub(crate) use packet::SetStage;
 
 
 #[derive(Component)]
@@ -30,7 +36,8 @@ pub(crate) struct Connection {
 #[derive(Component)]
 pub(crate) struct ConnStream {
     pub(crate) read_stream  : OwnedReadHalf,
-    pub(crate) write_stream : Arc<Mutex<OwnedWriteHalf>>,
+    pub(crate) write_sender : mpsc::UnboundedSender<(SetStage, Vec<u8>,)>,
+    pub(crate) writer_task  : ManuallyDrop<Task<()>>,
     pub(crate) data_queue   : VecDeque<u8>,
     pub(crate) packet_proc  : PacketProcessing,
     pub(crate) packet_index : u128,
@@ -40,7 +47,7 @@ pub(crate) struct ConnStream {
 
 impl ConnStream {
 
-    pub fn read_packet<T : PrefixedPacketDecode>(&mut self) -> Option<T> {
+    pub fn read_packet<T : PrefixedPacketDecode + PacketMeta<BoundT = BoundC2S>>(&mut self) -> Option<T> {
         let result = PacketReader::from_raw_queue(self.data_queue.iter().cloned()).and_then(
             |(smalldata, consumed,)| {
                 for _ in 0..consumed {
@@ -65,31 +72,47 @@ impl ConnStream {
         }
     }
 
-    pub fn send_packet<T : PrefixedPacketEncode>(&mut self, cmds : &mut Commands, packet : T) -> () {
+    pub fn send_packet_config<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StageConfig>>(&mut self, packet : T) -> Result<(), EncodeError> {
+        unsafe { self.send_packet(SetStage::Config, packet) }
+    }
+
+    pub fn send_packet_play<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StagePlay>>(&mut self, packet : T) -> Result<(), EncodeError> {
+        unsafe { self.send_packet(SetStage::Play, packet) }
+    }
+
+    pub unsafe fn send_packet_noset<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C>>(&mut self, packet : T) -> Result<(), EncodeError> {
+        unsafe { self.send_packet(SetStage::NoSet, packet) }
+    }
+
+    pub unsafe fn send_packet<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C>>(&mut self, set_stage : SetStage, packet : T) -> Result<(), EncodeError> {
         let mut plaindata = PacketWriter::new();
-        if let Err(_) = packet.encode_prefixed(&mut plaindata) {
+        if let Err(err) = packet.encode_prefixed(&mut plaindata) {
             // TODO: Log warning
-            self.shutdown.store(true, AtomicOrdering::Relaxed); return;
+            self.shutdown.store(true, AtomicOrdering::Relaxed);
+            return Err(err);
         }
         let cipherdata = match (self.packet_proc.encode_encrypt(plaindata)) {
             Ok(cipherdata) => cipherdata,
-            Err(_) => {
+            Err(err) => {
                 // TODO: Log warning
-                self.shutdown.store(true, AtomicOrdering::Relaxed); return;
+                self.shutdown.store(true, AtomicOrdering::Relaxed);
+                return Err(err);
             }
         };
-        let write_stream = Arc::clone(&self.write_stream);
-        let shutdown     = Arc::clone(&self.shutdown);
-        cmds.spawn_task(async move || {
-            let mut write_stream = write_stream.lock().await;
-            if let Err(_) = write_stream.write(cipherdata.as_slice()).await {
-                // TODO: Log warning
-                shutdown.store(true, AtomicOrdering::Relaxed);
-            };
-            Ok(())
-        });
+        if let Err(_) = self.write_sender.send((set_stage, cipherdata.into_inner(),)) {
+            // TODO: Log warning
+            self.shutdown.store(true, AtomicOrdering::Relaxed);
+            return Err(EncodeError::SendFailed);
+        }
+        Ok(())
     }
 
+}
+
+impl Drop for ConnStream {
+    fn drop(&mut self) {
+        let _ = unsafe { ManuallyDrop::take(&mut self.writer_task) }.cancel();
+    }
 }
 
 #[derive(Component)]
@@ -105,10 +128,10 @@ pub(crate) enum ConnKeepalive {
 
 
 pub(crate) fn read_conn_streams(
-    mut q_conn_streams : Query<(&mut ConnStream,)>
+    mut q_conns : Query<(&mut ConnStream,)>
 ) {
     let mut buf = [0u8; 128];
-    for (mut conn_stream,) in &mut q_conn_streams {
+    for (mut conn_stream,) in &mut q_conns {
         match (conn_stream.read_stream.try_read(&mut buf)) {
             Ok(count) => {
                 conn_stream.data_queue.reserve(count);

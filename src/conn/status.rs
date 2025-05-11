@@ -27,7 +27,6 @@ pub(crate) struct ConnStateStatus {
 
 
 pub(crate) fn handle_state(
-    mut cmds      : Commands,
     mut q_conns   : Query<(&mut ConnStream, &mut ConnStateStatus),>,
         r_motd    : Res<ServerMotd>,
         r_version : Res<ServerVersion>,
@@ -42,7 +41,7 @@ pub(crate) fn handle_state(
                         conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
                     } else {
                         state.sent_status = true;
-                        conn_stream.send_packet(&mut cmds, StatusResponse {
+                        if (unsafe { conn_stream.send_packet_noset(StatusResponse {
                             version              : StatusResponseVersion {
                                 name     : r_version.0.to_string(),
                                 protocol : PROTOCOL_VERSION
@@ -52,7 +51,7 @@ pub(crate) fn handle_state(
                             favicon_png_b64      : r_favicon.0.to_string(),
                             enforce_chat_reports : false,
                             prevent_chat_reports : true
-                        }.to_packet());
+                        }.to_packet()) }.is_err()) { continue; }
                     }
                 },
 
@@ -61,7 +60,9 @@ pub(crate) fn handle_state(
                         conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
                     } else {
                         state.sent_pong = true;
-                        conn_stream.send_packet(&mut cmds, PongResponseS2CStatusPacket { timestamp });
+                        if (unsafe { conn_stream.send_packet_noset(
+                            PongResponseS2CStatusPacket { timestamp }
+                        ) }.is_err()) { continue; }
                     }
                 }
 

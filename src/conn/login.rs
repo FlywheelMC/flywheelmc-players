@@ -9,7 +9,7 @@ use crate::{
     RegistryPackets
 };
 use crate::player::{ Player, PlayerJoined };
-use crate::conn::{ ConnStream, PacketReadEvent, IncomingPacket };
+use crate::conn::{ ConnStream, PacketReadEvent };
 use crate::conn::play::ConnStatePlay;
 use crate::world;
 use flywheelmc_common::prelude::*;
@@ -83,7 +83,7 @@ pub(crate) enum ConnStateLogin {
 
 pub(crate) fn handle_state(
     mut cmds           : Commands,
-    mut q_conn_streams : Query<(Entity, &mut ConnStream, &mut ConnStateLogin,)>,
+    mut q_conns        : Query<(Entity, &mut ConnStream, &mut ConnStateLogin,)>,
         r_threshold    : Res<CompressionThreshold>,
         r_mojauth      : Res<MojauthEnabled>,
         r_server_id    : Res<ServerId>,
@@ -95,7 +95,7 @@ pub(crate) fn handle_state(
     mut ew_joined      : EventWriter<PlayerJoined>,
     mut ew_packet      : EventWriter<PacketReadEvent>
 ) {
-    for (entity, mut conn_stream, mut state) in &mut q_conn_streams {
+    for (entity, mut conn_stream, mut state) in &mut q_conns {
         match (&mut*state) {
 
 
@@ -103,20 +103,20 @@ pub(crate) fn handle_state(
                 if let Some(C2SLoginPackets::Hello(HelloC2SLoginPacket { username, .. })) = conn_stream.read_packet() {
                     // Set compression.
                     let threshold = r_threshold.0;
-                    conn_stream.send_packet(&mut cmds, LoginCompressionS2CLoginPacket {
+                    if (unsafe { conn_stream.send_packet_noset(LoginCompressionS2CLoginPacket {
                         threshold : threshold.into()
-                    });
+                    }) }.is_err()) { continue; }
                     conn_stream.packet_proc.compression = CompressionMode::ZLib { threshold };
 
                     // Share keys.
                     let (private_key, public_key) = generate_key_pair::<1024>();
                     let verify_token              = array::from_fn::<_, 4, _>(|_| rand::random::<u8>());
-                    conn_stream.send_packet(&mut cmds, HelloS2CLoginPacket {
+                    if (unsafe { conn_stream.send_packet_noset(HelloS2CLoginPacket {
                         server_id    : r_server_id.0.to_string(),
                         public_key   : public_key.der_bytes().into(),
                         verify_token : verify_token.to_vec().into(),
                         should_auth  : r_mojauth.0
-                    });
+                    }) }.is_err()) { continue; }
 
                     *state = ConnStateLogin::ExchangingKeys {
                         username,
@@ -186,11 +186,11 @@ pub(crate) fn handle_state(
 
 
             ConnStateLogin::HandleMojauth { mojauth } => {
-                conn_stream.send_packet(&mut cmds, LoginFinishedS2CLoginPacket {
+                if (unsafe { conn_stream.send_packet_noset(LoginFinishedS2CLoginPacket {
                     uuid     : mojauth.uuid,
                     username : mojauth.name.clone(),
                     props    : default()
-                });
+                }) }.is_err()) { continue; }
                 // TODO: Check infractions
                 // TODO: Check already logged in network (max 5?)
                 *state = ConnStateLogin::FinishingLogin {
@@ -205,19 +205,21 @@ pub(crate) fn handle_state(
                 if let Some(C2SLoginPackets::LoginAcknowledged(_)) = conn_stream.read_packet() {
 
                     // Send server brand
-                    conn_stream.send_packet(&mut cmds, CustomPayloadS2CConfigPacket {
+                    if (conn_stream.send_packet_config(CustomPayloadS2CConfigPacket {
                         channel : Identifier::vanilla_const("brand"),
                         data    : {
                             let mut buf = PacketWriter::new();
                             buf.encode_write(&r_server_brand.0).unwrap();
                             buf.into_inner().into()
                         }
-                    });
+                    }).is_err()) { continue; }
 
                     // Send registries
-                    conn_stream.send_packet(&mut cmds, SelectKnownPacksS2CConfigPacket::default());
+                    if (conn_stream.send_packet_config(
+                        SelectKnownPacksS2CConfigPacket::default()
+                    ).is_err()) { continue; }
                     for packet in &r_reg_packets.0 {
-                        conn_stream.send_packet(&mut cmds, packet);
+                        if (conn_stream.send_packet_config(packet).is_err()) { continue; }
                     }
 
                     // Complete config
@@ -231,7 +233,9 @@ pub(crate) fn handle_state(
                         world::ViewDistance(Ordered::new(NonZeroU8::MIN))
                     ));
 
-                    conn_stream.send_packet(&mut cmds, FinishConfigurationS2CConfigPacket);
+                    if (conn_stream.send_packet_config(FinishConfigurationS2CConfigPacket).is_err()) {
+                        continue;
+                    }
                     *state = ConnStateLogin::FinishingConfig {
                         uuid     : *uuid,
                         username : mem::replace(username, String::new()),
@@ -254,7 +258,7 @@ pub(crate) fn handle_state(
                         drop((username, props,));
 
                         let view_dist = (r_view_dist.0.get() as usize).into();
-                        conn_stream.send_packet(&mut cmds, LoginS2CPlayPacket {
+                        if (conn_stream.send_packet_play(LoginS2CPlayPacket {
                             entity               : 1.into(),
                             hardcore             : false,
                             dims                 : vec![ r_default_dim.0.clone() ].into(),
@@ -275,8 +279,8 @@ pub(crate) fn handle_state(
                             portal_cooldown      : 0.into(),
                             sea_level            : 0.into(),
                             enforce_chat_reports : false
-                        });
-                        conn_stream.send_packet(&mut cmds, AddEntityS2CPlayPacket {
+                        }).is_err()) { continue; }
+                        if (conn_stream.send_packet_play(AddEntityS2CPlayPacket {
                             id       : 1.into(),
                             uuid     : *uuid,
                             kind     : r_regs.entity_type.get_entry(&Identifier::vanilla_const("player")).unwrap(),
@@ -290,7 +294,7 @@ pub(crate) fn handle_state(
                             vel_x    : 0,
                             vel_y    : 0,
                             vel_z    : 0
-                        });
+                        }).is_err()) { continue; }
 
                     } else {
                         ew_packet.write(PacketReadEvent {
