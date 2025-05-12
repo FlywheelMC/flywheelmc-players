@@ -27,12 +27,7 @@ pub(crate) mod packet;
 
 #[derive(Component)]
 pub(crate) struct Connection {
-    pub(crate) peer_addr : SocketAddr,
-    pub(crate) shutdown  : Arc<AtomicBool>
-}
-
-#[derive(Component)]
-pub(crate) struct ConnStream {
+    pub(crate) peer_addr    : SocketAddr,
     pub(crate) read_stream  : OwnedReadHalf,
     pub(crate) write_sender : mpsc::UnboundedSender<(packet::SetStage, Vec<u8>,)>,
     pub(crate) stage_sender : mpsc::UnboundedSender<packet::NextStage>,
@@ -44,7 +39,7 @@ pub(crate) struct ConnStream {
 }
 
 
-impl ConnStream {
+impl Connection {
 
     pub fn read_packet<T : PrefixedPacketDecode + PacketMeta<BoundT = BoundC2S>>(&mut self) -> Option<T> {
         let result = PacketReader::from_raw_queue(self.data_queue.iter().cloned()).and_then(
@@ -62,9 +57,17 @@ impl ConnStream {
             Err(err) => {
                 match (err) {
                     DecodeError::EndOfBuffer => { },
-                    DecodeError::InvalidData(_) => { self.shutdown.store(true, AtomicOrdering::Relaxed); } // TODO: Log warning
-                    DecodeError::UnconsumedBuffer => { self.shutdown.store(true, AtomicOrdering::Relaxed); }, // TODO: Log warning
-                    DecodeError::UnknownPacketPrefix(_) => { } // TODO: Log warning
+                    DecodeError::InvalidData(err) => {
+                        error!("Failed to decode packet from peer {}: {}", self.peer_addr, err);
+                        self.shutdown.store(true, AtomicOrdering::Relaxed);
+                    }
+                    DecodeError::UnconsumedBuffer => {
+                        error!("Failed to decode packet from peer {}: {}", self.peer_addr, DecodeError::UnconsumedBuffer);
+                        self.shutdown.store(true, AtomicOrdering::Relaxed);
+                    },
+                    DecodeError::UnknownPacketPrefix(prefix) => {
+                        warn!("Received packet with unknown prefix {:#04X} from peer {}", prefix, self.peer_addr);
+                    }
                 }
                 None
             }
@@ -86,20 +89,20 @@ impl ConnStream {
     pub unsafe fn send_packet<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C> + Debug>(&mut self, set_stage : packet::SetStage, packet : T) -> Result<(), EncodeError> {
         let mut plaindata = PacketWriter::new();
         if let Err(err) = packet.encode_prefixed(&mut plaindata) {
-            // TODO: Log warning
+            error!("Failed to encode packet for peer {}: {}", self.peer_addr, err);
             self.shutdown.store(true, AtomicOrdering::Relaxed);
             return Err(err);
         }
         let cipherdata = match (self.packet_proc.encode_encrypt(plaindata)) {
             Ok(cipherdata) => cipherdata,
             Err(err) => {
-                // TODO: Log warning
+                error!("Failed to encrypt and compress packet for peer {}: {}", self.peer_addr, err);
                 self.shutdown.store(true, AtomicOrdering::Relaxed);
                 return Err(err);
             }
         };
-        if let Err(_) = self.write_sender.send((set_stage, cipherdata.into_inner(),)) {
-            // TODO: Log warning
+        if let Err(err) = self.write_sender.send((set_stage, cipherdata.into_inner(),)) {
+            error!("Failed to send packet to peer {}: {}", self.peer_addr, err);
             self.shutdown.store(true, AtomicOrdering::Relaxed);
             return Err(EncodeError::SendFailed);
         }
@@ -108,7 +111,7 @@ impl ConnStream {
 
 }
 
-impl Drop for ConnStream {
+impl Drop for Connection {
     fn drop(&mut self) {
         let _ = unsafe { ManuallyDrop::take(&mut self.writer_task) }.cancel();
     }
@@ -126,27 +129,66 @@ pub(crate) enum ConnKeepalive {
 }
 
 
+pub(crate) async fn run_listener(
+    listen_addrs : SocketAddrs
+) -> io::Result<()> {
+    info!("Starting game server...");
+    let listener = TcpListener::bind(&**listen_addrs).await?;
+    pass!("Started game server on {}.", listen_addrs);
+    loop {
+        let (stream, peer_addr,) = listener.accept().await?;
+        debug!("Incoming connection from {}.", peer_addr);
+        let (read_stream, write_stream,) = stream.into_split();
+        let (write_sender, write_receiver,) = mpsc::unbounded_channel();
+        let (stage_sender, stage_receiver,) = mpsc::unbounded_channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        AsyncWorld.spawn_bundle((
+            Connection {
+                peer_addr,
+                read_stream,
+                write_sender,
+                stage_sender,
+                writer_task  : ManuallyDrop::new(AsyncWorld.spawn_task(packet::PacketWriterTask {
+                    peer_addr,
+                    current_stage  : packet::CurrentStage::Startup,
+                    write_receiver,
+                    stage_receiver,
+                    stream         : write_stream,
+                    shutdown       : Arc::clone(&shutdown),
+                    send_timeout   : Duration::from_millis(250)
+                }.run())),
+                data_queue   : VecDeque::new(),
+                packet_proc  : PacketProcessing::NONE,
+                packet_index : 0,
+                shutdown
+            },
+            ConnKeepalive::Sending { send_at : Instant::now() },
+            handshake::ConnStateHandshake,
+        ));
+    }
+}
+
 pub(crate) fn read_conn_streams(
-    mut q_conns : Query<(&mut ConnStream,)>
+    mut q_conns : Query<(&mut Connection,)>
 ) {
     let mut buf = [0u8; 128];
-    for (mut conn_stream,) in &mut q_conns {
-        match (conn_stream.read_stream.try_read(&mut buf)) {
+    for (mut conn,) in &mut q_conns {
+        match (conn.read_stream.try_read(&mut buf)) {
             Ok(count) => {
-                conn_stream.data_queue.reserve(count);
+                conn.data_queue.reserve(count);
                 for i in 0..count {
-                    if let Ok(b) = conn_stream.packet_proc.secret_cipher.decrypt_u8(buf[i]) {
-                        conn_stream.data_queue.push_back(b);
+                    if let Ok(b) = conn.packet_proc.secret_cipher.decrypt_u8(buf[i]) {
+                        conn.data_queue.push_back(b);
                     } else {
-                        // TODO: Log warning
-                        conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                        error!("Failed to decrypt packet from peer {}", conn.peer_addr);
+                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
                     }
                 }
             },
             Err(err) if (err.kind() == io::ErrorKind::WouldBlock) => { },
-            Err(_) => {
-                // TODO: Log warning
-                conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+            Err(err) => {
+                error!("Failed to read packet from peer {}", err);
+                conn.shutdown.store(true, AtomicOrdering::Relaxed);
             }
         }
     }
@@ -163,13 +205,14 @@ pub(crate) fn shutdown_conns(
 ) {
     for (entity, conn, player,) in &mut q_conns {
         if (conn.shutdown.load(AtomicOrdering::Relaxed)) {
-            println!("Shutdown {}", conn.peer_addr);
             if let Some(mut player) = player {
                 ew_left.write(PlayerLeft {
                     uuid     : player.uuid,
                     username : mem::replace(&mut player.username, String::new())
                 });
+                info!("Player {} ({}) disconnected.", player.username(), player.uuid());
             }
+            debug!("Peer {} disconnected.", conn.peer_addr);
             cmds.entity(entity).despawn();
         }
     }

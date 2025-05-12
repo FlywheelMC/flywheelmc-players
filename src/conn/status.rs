@@ -3,7 +3,7 @@ use crate::{
     ServerVersion,
     ServerFavicon
 };
-use crate::conn::ConnStream;
+use crate::conn::Connection;
 use flywheelmc_common::prelude::*;
 use protocol::PROTOCOL_VERSION;
 use protocol::packet::c2s::status::{
@@ -27,21 +27,22 @@ pub(crate) struct ConnStateStatus {
 
 
 pub(crate) fn handle_state(
-    mut q_conns   : Query<(&mut ConnStream, &mut ConnStateStatus),>,
+    mut q_conns   : Query<(&mut Connection, &mut ConnStateStatus),>,
         r_motd    : Res<ServerMotd>,
         r_version : Res<ServerVersion>,
         r_favicon : Res<ServerFavicon>
 ) {
-    for (mut conn_stream, mut state) in &mut q_conns {
-        if let Some(packet) = conn_stream.read_packet() {
+    for (mut conn, mut state) in &mut q_conns {
+        if let Some(packet) = conn.read_packet() {
             match (packet) {
 
                 C2SStatusPackets::StatusRequest(StatusRequestC2SStatusPacket) => {
                     if (state.sent_status) {
-                        conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
                     } else {
+                        trace!("Peer {} requested status", conn.peer_addr);
                         state.sent_status = true;
-                        if (unsafe { conn_stream.send_packet_noset(StatusResponse {
+                        if (unsafe { conn.send_packet_noset(StatusResponse {
                             version              : StatusResponseVersion {
                                 name     : r_version.0.to_string(),
                                 protocol : PROTOCOL_VERSION
@@ -57,10 +58,11 @@ pub(crate) fn handle_state(
 
                 C2SStatusPackets::PingRequest(PingRequestC2SStatusPacket { timestamp }) => {
                     if (state.sent_pong) {
-                        conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
                     } else {
+                        trace!("Peer {} requested ping", conn.peer_addr);
                         state.sent_pong = true;
-                        if (unsafe { conn_stream.send_packet_noset(
+                        if (unsafe { conn.send_packet_noset(
                             PongResponseS2CStatusPacket { timestamp }
                         ) }.is_err()) { continue; }
                     }
@@ -68,7 +70,7 @@ pub(crate) fn handle_state(
 
             }
             if (state.sent_status && state.sent_pong) {
-                conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                conn.shutdown.store(true, AtomicOrdering::Relaxed);
             }
         }
     }

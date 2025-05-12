@@ -1,5 +1,5 @@
 use crate::MaxViewDistance;
-use crate::conn::ConnStream;
+use crate::conn::Connection;
 use crate::conn::packet::{ PacketReadEvent, Packet };
 use crate::conn::play::ConnStatePlay;
 use flywheelmc_common::prelude::*;
@@ -61,17 +61,17 @@ pub(crate) fn read_settings_updates(
     }
 }
 pub(crate) fn update_chunk_view(
-    mut q_conns : Query<(&mut ConnStream, &mut ChunkCentre, &mut ViewDistance,), (With<ConnStatePlay>,)>
+    mut q_conns : Query<(&mut Connection, &mut ChunkCentre, &mut ViewDistance,), (With<ConnStatePlay>,)>
 ) {
-    for (mut conn_stream, mut chunk_centre, mut view_dist,) in &mut q_conns {
+    for (mut conn, mut chunk_centre, mut view_dist,) in &mut q_conns {
         if (Dirty::take_dirty(&mut chunk_centre.0)) {
-            let _ = conn_stream.send_packet_play(SetChunkCacheCenterS2CPlayPacket {
+            let _ = conn.send_packet_play(SetChunkCacheCenterS2CPlayPacket {
                 chunk_x : chunk_centre.0.x.into(),
                 chunk_z : chunk_centre.0.y.into(),
             });
         }
         if (Ordered::take_dirty(&mut view_dist.0)) {
-            let _ = conn_stream.send_packet_play(SetChunkCacheRadiusS2CPlayPacket {
+            let _ = conn.send_packet_play(SetChunkCacheRadiusS2CPlayPacket {
                 view_dist : (view_dist.0.get() as i32).into()
             });
         }

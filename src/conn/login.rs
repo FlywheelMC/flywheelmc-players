@@ -9,7 +9,7 @@ use crate::{
     RegistryPackets
 };
 use crate::player::{ Player, PlayerJoined };
-use crate::conn::ConnStream;
+use crate::conn::Connection;
 use crate::conn::packet::{ PacketReadEvent, NextStage };
 use crate::conn::play::ConnStatePlay;
 use crate::world;
@@ -37,7 +37,9 @@ use protocol::packet::s2c::config::{
 use protocol::packet::s2c::play::{
     LoginS2CPlayPacket,
     AddEntityS2CPlayPacket,
-    Gamemode
+    GameEventS2CPlayPacket,
+    Gamemode,
+    GameEvent
 };
 use protocol::packet::processing::{
     CompressionMode,
@@ -75,16 +77,14 @@ pub(crate) enum ConnStateLogin {
         props    : Vec<MojAuthProperty>
     },
     FinishingConfig {
-        uuid     : Uuid,
-        username : String,
-        props    : Vec<MojAuthProperty>
+        uuid : Uuid
     }
 }
 
 
 pub(crate) fn handle_state(
     mut cmds           : Commands,
-    mut q_conns        : Query<(Entity, &mut ConnStream, &mut ConnStateLogin,)>,
+    mut q_conns        : Query<(Entity, &mut Connection, &mut ConnStateLogin,)>,
         r_threshold    : Res<CompressionThreshold>,
         r_mojauth      : Res<MojauthEnabled>,
         r_server_id    : Res<ServerId>,
@@ -96,23 +96,25 @@ pub(crate) fn handle_state(
     mut ew_joined      : EventWriter<PlayerJoined>,
     mut ew_packet      : EventWriter<PacketReadEvent>
 ) {
-    for (entity, mut conn_stream, mut state) in &mut q_conns {
+    for (entity, mut conn, mut state) in &mut q_conns {
         match (&mut*state) {
 
 
             ConnStateLogin::WaitingForHello => {
-                if let Some(C2SLoginPackets::Hello(HelloC2SLoginPacket { username, .. })) = conn_stream.read_packet() {
+                if let Some(C2SLoginPackets::Hello(HelloC2SLoginPacket { username, .. })) = conn.read_packet() {
+                    debug!("Peer {} is logging in...", conn.peer_addr);
+
                     // Set compression.
                     let threshold = r_threshold.0;
-                    if (unsafe { conn_stream.send_packet_noset(LoginCompressionS2CLoginPacket {
+                    if (unsafe { conn.send_packet_noset(LoginCompressionS2CLoginPacket {
                         threshold : threshold.into()
                     }) }.is_err()) { continue; }
-                    conn_stream.packet_proc.compression = CompressionMode::ZLib { threshold };
+                    conn.packet_proc.compression = CompressionMode::ZLib { threshold };
 
                     // Share keys.
                     let (private_key, public_key) = generate_key_pair::<1024>();
                     let verify_token              = array::from_fn::<_, 4, _>(|_| rand::random::<u8>());
-                    if (unsafe { conn_stream.send_packet_noset(HelloS2CLoginPacket {
+                    if (unsafe { conn.send_packet_noset(HelloS2CLoginPacket {
                         server_id    : r_server_id.0.to_string(),
                         public_key   : public_key.der_bytes().into(),
                         verify_token : verify_token.to_vec().into(),
@@ -129,30 +131,30 @@ pub(crate) fn handle_state(
 
 
             ConnStateLogin::ExchangingKeys { username, private_key, public_key, verify_token } => {
-                if let Some(C2SLoginPackets::Key(packet)) = conn_stream.read_packet() {
+                if let Some(C2SLoginPackets::Key(packet)) = conn.read_packet() {
 
                     // Check the verify token.
                     if let Ok(decrypted_verify_token) = private_key.decrypt(packet.verify_token.as_slice())
                         && (decrypted_verify_token == verify_token.as_slice()) {
                     } else {
-                        // TODO: Log warning
-                        conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                        error!("Failed to verify keys from peer {}", conn.peer_addr);
+                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
                         continue;
                     }
 
                     // Decrypt the secret key and construct a cipher.
                     let Ok(secret_key) = private_key.decrypt(packet.secret_key.as_slice()) else {
-                        // TODO: Log warning
-                        conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                        error!("Failed to decrypt keys from peer {}", conn.peer_addr);
+                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
                         continue;
                     };
-                    conn_stream.packet_proc.secret_cipher = SecretCipher::from_key_bytes(&secret_key);
+                    conn.packet_proc.secret_cipher = SecretCipher::from_key_bytes(&secret_key);
 
                     // Check mojang authentication
                     *state = if (r_mojauth.0) {
                         let username          = mem::replace(username, String::new());
                         let server_id         = r_server_id.0.clone();
-                        let secret_cipher_key = conn_stream.packet_proc.secret_cipher.key().unwrap().to_vec();
+                        let secret_cipher_key = conn.packet_proc.secret_cipher.key().unwrap().to_vec();
                         let public_key        = public_key.clone();
                         ConnStateLogin::CheckingMojauth { fut : ManuallyPoll::new(async move {
                             MojAuth::start(
@@ -178,8 +180,8 @@ pub(crate) fn handle_state(
                             *state = ConnStateLogin::HandleMojauth { mojauth }
                         },
                         Err(_) => {
-                            // TODO: Log warning
-                            conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                            error!("Failed to authenticate peer {}", conn.peer_addr);
+                            conn.shutdown.store(true, AtomicOrdering::Relaxed);
                         }
                     }
                 }
@@ -187,7 +189,7 @@ pub(crate) fn handle_state(
 
 
             ConnStateLogin::HandleMojauth { mojauth } => {
-                if (unsafe { conn_stream.send_packet_noset(LoginFinishedS2CLoginPacket {
+                if (unsafe { conn.send_packet_noset(LoginFinishedS2CLoginPacket {
                     uuid     : mojauth.uuid,
                     username : mojauth.name.clone(),
                     props    : default()
@@ -203,15 +205,15 @@ pub(crate) fn handle_state(
 
 
             ConnStateLogin::FinishingLogin { uuid, username, props } => {
-                if let Some(C2SLoginPackets::LoginAcknowledged(_)) = conn_stream.read_packet() {
+                if let Some(C2SLoginPackets::LoginAcknowledged(_)) = conn.read_packet() {
 
-                    if (conn_stream.stage_sender.send(NextStage::Config).is_err()) {
-                        conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                    if (conn.stage_sender.send(NextStage::Config).is_err()) {
+                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
                         continue;
                     }
 
                     // Send server brand
-                    if (unsafe { conn_stream.send_packet_noset(CustomPayloadS2CConfigPacket {
+                    if (unsafe { conn.send_packet_noset(CustomPayloadS2CConfigPacket {
                         channel : Identifier::vanilla_const("brand"),
                         data    : {
                             let mut buf = PacketWriter::new();
@@ -221,14 +223,15 @@ pub(crate) fn handle_state(
                     }) }.is_err()) { continue; }
 
                     // Send registries
-                    if (unsafe { conn_stream.send_packet_noset(
+                    if (unsafe { conn.send_packet_noset(
                         SelectKnownPacksS2CConfigPacket::default()
                     ) }.is_err()) { continue; }
                     for packet in &r_reg_packets.0 {
-                        if (unsafe { conn_stream.send_packet_noset(packet) }.is_err()) { continue; }
+                        if (unsafe { conn.send_packet_noset(packet) }.is_err()) { continue; }
                     }
 
                     // Complete config
+                    info!("Player {} ({}) joined.", username, uuid);
                     cmds.entity(entity).insert((
                         Player {
                             uuid     : *uuid,
@@ -238,38 +241,35 @@ pub(crate) fn handle_state(
                         world::ChunkCentre(Dirty::new_dirty(Vec2::<i32>::ZERO)),
                         world::ViewDistance(Ordered::new(NonZeroU8::MIN))
                     ));
+                    drop((username, props,));
 
-                    if (unsafe { conn_stream.send_packet_noset(FinishConfigurationS2CConfigPacket) }.is_err()) {
+                    if (unsafe { conn.send_packet_noset(FinishConfigurationS2CConfigPacket) }.is_err()) {
                         continue;
                     }
                     *state = ConnStateLogin::FinishingConfig {
-                        uuid     : *uuid,
-                        username : mem::replace(username, String::new()),
-                        props    : mem::replace(props, Vec::new())
+                        uuid : *uuid
                     }
 
                 }
             },
 
 
-            ConnStateLogin::FinishingConfig { uuid, username, props } => {
-                if let Some(packet) = conn_stream.read_packet() {
+            ConnStateLogin::FinishingConfig { uuid } => {
+                if let Some(packet) = conn.read_packet() {
                     if let C2SConfigPackets::FinishConfiguration(_) = packet {
-                        // TODO: Log info
 
                         cmds.entity(entity)
                             .remove::<ConnStateLogin>()
                             .insert(ConnStatePlay);
                         ew_joined.write(PlayerJoined(entity));
-                        drop((username, props,));
 
-                        if (conn_stream.stage_sender.send(NextStage::Play).is_err()) {
-                            conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                        if (conn.stage_sender.send(NextStage::Play).is_err()) {
+                            conn.shutdown.store(true, AtomicOrdering::Relaxed);
                             continue;
                         }
 
                         let view_dist = (r_view_dist.0.get() as usize).into();
-                        if (unsafe { conn_stream.send_packet_noset(LoginS2CPlayPacket {
+                        if (unsafe { conn.send_packet_noset(LoginS2CPlayPacket {
                             entity               : 1.into(),
                             hardcore             : false,
                             dims                 : vec![ r_default_dim.0.clone() ].into(),
@@ -291,7 +291,7 @@ pub(crate) fn handle_state(
                             sea_level            : 0.into(),
                             enforce_chat_reports : false
                         }) }.is_err()) { continue; }
-                        if (unsafe { conn_stream.send_packet_noset(AddEntityS2CPlayPacket {
+                        if (unsafe { conn.send_packet_noset(AddEntityS2CPlayPacket {
                             id       : 1.into(),
                             uuid     : *uuid,
                             kind     : r_regs.entity_type.get_entry(&Identifier::vanilla_const("player")).unwrap(),
@@ -306,12 +306,16 @@ pub(crate) fn handle_state(
                             vel_y    : 0,
                             vel_z    : 0
                         }) }.is_err()) { continue; }
+                        if (unsafe { conn.send_packet_noset(GameEventS2CPlayPacket {
+                            event : GameEvent::WaitForChunks,
+                            value : 0.0
+                        }) }.is_err()) { continue; }
 
                     } else {
                         ew_packet.write(PacketReadEvent {
                             entity,
                             packet : packet.into(),
-                            index  : conn_stream.packet_index.increment()
+                            index  : conn.packet_index.increment()
                         });
                     }
                 }

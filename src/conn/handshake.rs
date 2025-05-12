@@ -1,4 +1,4 @@
-use crate::conn::ConnStream;
+use crate::conn::Connection;
 use crate::conn::status::ConnStateStatus;
 use crate::conn::login::ConnStateLogin;
 use flywheelmc_common::prelude::*;
@@ -15,10 +15,10 @@ pub(crate) struct ConnStateHandshake;
 
 pub(crate) fn handle_state(
     mut cmds    : Commands,
-    mut q_conns : Query<(Entity, &mut ConnStream,), (With<ConnStateHandshake>,)>
+    mut q_conns : Query<(Entity, &mut Connection,), (With<ConnStateHandshake>,)>
 ) {
-    for (entity, mut conn_stream,) in &mut q_conns {
-        if let Some(packet) = conn_stream.read_packet() {
+    for (entity, mut conn,) in &mut q_conns {
+        if let Some(packet) = conn.read_packet() {
             let IntentionC2SHandshakePacket { intended_stage, .. } = packet;
 
             let mut entity = cmds.entity(entity);

@@ -49,6 +49,7 @@ pub(crate) enum NextStage {
 
 
 pub(crate) struct PacketWriterTask {
+    pub(crate) peer_addr      : SocketAddr,
     pub(crate) current_stage  : CurrentStage,
     pub(crate) write_receiver : mpsc::UnboundedReceiver<(SetStage, Vec<u8>,)>,
     pub(crate) stage_receiver : mpsc::UnboundedReceiver<NextStage>,
@@ -89,12 +90,12 @@ impl PacketWriterTask {
                     match (task::timeout(self.send_timeout, self.stream.write_all(&packet)).await) {
                         Ok(Ok(_)) => { },
                         Ok(Err(err)) => {
-                            // TODO: Log warning
+                            error!("Failed to send packet to peer {}: {}", self.peer_addr, err);
                             self.shutdown.store(true, AtomicOrdering::Relaxed);
                             return Err(());
                         }
                         Err(_) => {
-                            // TODO: Log warning (timed out)
+                            error!("Failed to send packet to peer {}: {}", self.peer_addr, io::ErrorKind::TimedOut);
                             self.shutdown.store(true, AtomicOrdering::Relaxed);
                             return Err(());
                         }

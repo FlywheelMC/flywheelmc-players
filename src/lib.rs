@@ -163,46 +163,7 @@ fn start_listener(
 ) {
     let listen_addrs = r_listen_addrs.0.clone();
     cmds.spawn_task(async move || {
-        let _ = handle_err(run_listener(listen_addrs).await);
+        let _ = handle_err(conn::run_listener(listen_addrs).await);
         Ok(())
     });
-}
-
-async fn run_listener(
-    listen_addrs : SocketAddrs
-) -> io::Result<()> {
-    let listener = TcpListener::bind(&**listen_addrs).await?;
-    loop {
-        let (stream, peer_addr,) = listener.accept().await?;
-        println!("Connected {}", peer_addr);
-        let (read_stream, write_stream,) = stream.into_split();
-        let (write_sender, write_receiver,) = mpsc::unbounded_channel();
-        let (stage_sender, stage_receiver,) = mpsc::unbounded_channel();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        AsyncWorld.spawn_bundle((
-            conn::Connection {
-                peer_addr,
-                shutdown  : Arc::clone(&shutdown)
-            },
-            conn::ConnStream {
-                read_stream,
-                write_sender,
-                stage_sender,
-                writer_task  : ManuallyDrop::new(AsyncWorld.spawn_task(conn::packet::PacketWriterTask {
-                    current_stage  : conn::packet::CurrentStage::Startup,
-                    write_receiver,
-                    stage_receiver,
-                    stream         : write_stream,
-                    shutdown       : Arc::clone(&shutdown),
-                    send_timeout   : Duration::from_millis(250)
-                }.run())),
-                data_queue   : VecDeque::new(),
-                packet_proc  : PacketProcessing::NONE,
-                packet_index : 0,
-                shutdown
-            },
-            conn::ConnKeepalive::Sending { send_at : Instant::now() },
-            conn::handshake::ConnStateHandshake,
-        ));
-    }
 }
