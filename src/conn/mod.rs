@@ -12,7 +12,7 @@ use protocol::packet::{
 };
 use protocol::packet::{
     BoundC2S, BoundS2C,
-    StageStatus, StageLogin, StageConfig, StagePlay
+    StageConfig, StagePlay
 };
 
 
@@ -23,8 +23,6 @@ pub(crate) mod config;
 pub(crate) mod play;
 
 pub(crate) mod packet;
-pub use packet::{ PacketReadEvent, Packet };
-pub(crate) use packet::SetStage;
 
 
 #[derive(Component)]
@@ -36,7 +34,8 @@ pub(crate) struct Connection {
 #[derive(Component)]
 pub(crate) struct ConnStream {
     pub(crate) read_stream  : OwnedReadHalf,
-    pub(crate) write_sender : mpsc::UnboundedSender<(SetStage, Vec<u8>,)>,
+    pub(crate) write_sender : mpsc::UnboundedSender<(packet::SetStage, Vec<u8>,)>,
+    pub(crate) stage_sender : mpsc::UnboundedSender<packet::NextStage>,
     pub(crate) writer_task  : ManuallyDrop<Task<()>>,
     pub(crate) data_queue   : VecDeque<u8>,
     pub(crate) packet_proc  : PacketProcessing,
@@ -72,19 +71,19 @@ impl ConnStream {
         }
     }
 
-    pub fn send_packet_config<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StageConfig>>(&mut self, packet : T) -> Result<(), EncodeError> {
-        unsafe { self.send_packet(SetStage::Config, packet) }
+    pub fn send_packet_config<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StageConfig> + Debug>(&mut self, packet : T) -> Result<(), EncodeError> {
+        unsafe { self.send_packet(packet::SetStage::Config, packet) }
     }
 
-    pub fn send_packet_play<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StagePlay>>(&mut self, packet : T) -> Result<(), EncodeError> {
-        unsafe { self.send_packet(SetStage::Play, packet) }
+    pub fn send_packet_play<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StagePlay> + Debug>(&mut self, packet : T) -> Result<(), EncodeError> {
+        unsafe { self.send_packet(packet::SetStage::Play, packet) }
     }
 
-    pub unsafe fn send_packet_noset<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C>>(&mut self, packet : T) -> Result<(), EncodeError> {
-        unsafe { self.send_packet(SetStage::NoSet, packet) }
+    pub unsafe fn send_packet_noset<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C> + Debug>(&mut self, packet : T) -> Result<(), EncodeError> {
+        unsafe { self.send_packet(packet::SetStage::NoSet, packet) }
     }
 
-    pub unsafe fn send_packet<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C>>(&mut self, set_stage : SetStage, packet : T) -> Result<(), EncodeError> {
+    pub unsafe fn send_packet<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C> + Debug>(&mut self, set_stage : packet::SetStage, packet : T) -> Result<(), EncodeError> {
         let mut plaindata = PacketWriter::new();
         if let Err(err) = packet.encode_prefixed(&mut plaindata) {
             // TODO: Log warning

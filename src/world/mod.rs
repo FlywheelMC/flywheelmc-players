@@ -1,6 +1,7 @@
 use crate::MaxViewDistance;
 use crate::conn::ConnStream;
 use crate::conn::packet::{ PacketReadEvent, Packet };
+use crate::conn::play::ConnStatePlay;
 use flywheelmc_common::prelude::*;
 use protocol::packet::c2s::config::{
     C2SConfigPackets,
@@ -10,7 +11,10 @@ use protocol::packet::c2s::play::{
     C2SPlayPackets,
     ClientInformationC2SPlayPacket
 };
-use protocol::packet::s2c::play::SetChunkCacheRadiusS2CPlayPacket;
+use protocol::packet::s2c::play::{
+    SetChunkCacheCenterS2CPlayPacket,
+    SetChunkCacheRadiusS2CPlayPacket
+};
 use protocol::value::BlockState;
 use protocol::registry::RegEntry;
 
@@ -39,14 +43,13 @@ pub struct Chunk {
     sections : Vec<ChunkSection>
 }
 
-
-pub(crate) fn update_view_distance(
-    mut q_conns     : Query<(&mut ConnStream, &mut ViewDistance,)>,
+pub(crate) fn read_settings_updates(
+    mut q_conns     : Query<(&mut ViewDistance,),>,
     mut er_packet   : EventReader<PacketReadEvent>,
         r_view_dist : Res<MaxViewDistance>
 ) {
     for PacketReadEvent { entity, packet, index } in er_packet.read() {
-        if let Ok((_, mut view_dist,)) = q_conns.get_mut(*entity) {
+        if let Ok((mut view_dist,)) = q_conns.get_mut(*entity) {
             if let Packet::Config(C2SConfigPackets::ClientInformation(ClientInformationC2SConfigPacket { info }))
                 | Packet::Play(C2SPlayPackets::ClientInformation(ClientInformationC2SPlayPacket { info })) = packet
             {
@@ -56,7 +59,17 @@ pub(crate) fn update_view_distance(
             }
         }
     }
-    for (mut conn_stream, mut view_dist,) in &mut q_conns {
+}
+pub(crate) fn update_chunk_view(
+    mut q_conns : Query<(&mut ConnStream, &mut ChunkCentre, &mut ViewDistance,), (With<ConnStatePlay>,)>
+) {
+    for (mut conn_stream, mut chunk_centre, mut view_dist,) in &mut q_conns {
+        if (Dirty::take_dirty(&mut chunk_centre.0)) {
+            let _ = conn_stream.send_packet_play(SetChunkCacheCenterS2CPlayPacket {
+                chunk_x : chunk_centre.0.x.into(),
+                chunk_z : chunk_centre.0.y.into(),
+            });
+        }
         if (Ordered::take_dirty(&mut view_dist.0)) {
             let _ = conn_stream.send_packet_play(SetChunkCacheRadiusS2CPlayPacket {
                 view_dist : (view_dist.0.get() as i32).into()

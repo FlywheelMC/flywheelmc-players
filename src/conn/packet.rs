@@ -1,9 +1,4 @@
 use flywheelmc_common::prelude::*;
-use protocol::packet::{
-    PacketWriter, EncodeError,
-    PrefixedPacketEncode,
-    PacketMeta, BoundS2C
-};
 use protocol::packet::c2s::config::C2SConfigPackets;
 use protocol::packet::c2s::play::C2SPlayPackets;
 
@@ -41,41 +36,83 @@ pub(crate) enum SetStage {
     Play
 }
 #[derive(Debug)]
-enum CurrentStage {
+pub(crate) enum CurrentStage {
     Startup,
+    Config,
+    Play
+}
+#[derive(Debug)]
+pub(crate) enum NextStage {
     Config,
     Play
 }
 
 
-pub(crate) async fn run_packet_writer(
-    mut write_receiver : mpsc::UnboundedReceiver<(SetStage, Vec<u8>,)>,
-    mut stream         : OwnedWriteHalf,
-        shutdown       : Arc<AtomicBool>,
-        send_timeout   : Duration
-) -> () {
-    let mut current_stage = CurrentStage::Startup;
-    loop {
-        match (write_receiver.try_recv()) {
-            Ok((set_stage, packet,)) => {
-                todo!("set stage");
-                /*match (task::timeout(send_timeout, stream.write_all(&packet)).await) {
-                    Ok(Ok(_)) => { },
-                    Ok(Err(err)) => {
-                        // TODO: Log warning
-                        shutdown.store(true, AtomicOrdering::Relaxed);
-                        break;
-                    }
-                    Err(_) => {
-                        // TODO: Log warning (timed out)
-                        shutdown.store(true, AtomicOrdering::Relaxed);
-                        break;
-                    }
-                }*/
-            },
-            Err(mpsc::TryRecvError::Empty) => { },
-            Err(mpsc::TryRecvError::Disconnected) => { break; }
-        }
-        task::yield_now().await;
+pub(crate) struct PacketWriterTask {
+    pub(crate) current_stage  : CurrentStage,
+    pub(crate) write_receiver : mpsc::UnboundedReceiver<(SetStage, Vec<u8>,)>,
+    pub(crate) stage_receiver : mpsc::UnboundedReceiver<NextStage>,
+    pub(crate) stream         : OwnedWriteHalf,
+    pub(crate) shutdown       : Arc<AtomicBool>,
+    pub(crate) send_timeout   : Duration
+}
+
+impl PacketWriterTask {
+
+    #[inline(always)]
+    pub(crate) async fn run(self) -> () {
+        let _ = self.run_inner().await;
     }
+
+    async fn run_inner(mut self) -> Result<(), ()> {
+        loop {
+            match (self.write_receiver.try_recv()) {
+                Ok((set_stage, packet,)) => {
+                    match (set_stage) {
+                        SetStage::NoSet  => { },
+                        SetStage::Config => { match (self.current_stage) {
+                            CurrentStage::Config => { },
+                            CurrentStage::Startup
+                                | CurrentStage::Play
+                            => {
+                                todo!("switch to play")
+                            }
+                        }; },
+                        SetStage::Play => { match (self.current_stage) {
+                            CurrentStage::Startup => { self.current_stage = CurrentStage::Play; },
+                            CurrentStage::Config  => {
+                                todo!("switch to config")
+                            },
+                            CurrentStage::Play => { }
+                        } }
+                    }
+                    match (task::timeout(self.send_timeout, self.stream.write_all(&packet)).await) {
+                        Ok(Ok(_)) => { },
+                        Ok(Err(err)) => {
+                            // TODO: Log warning
+                            self.shutdown.store(true, AtomicOrdering::Relaxed);
+                            return Err(());
+                        }
+                        Err(_) => {
+                            // TODO: Log warning (timed out)
+                            self.shutdown.store(true, AtomicOrdering::Relaxed);
+                            return Err(());
+                        }
+                    }
+                },
+                Err(mpsc::TryRecvError::Empty) => { },
+                Err(mpsc::TryRecvError::Disconnected) => { return Err(()); }
+            }
+            match (self.stage_receiver.try_recv()) {
+                Ok(stage) => { self.current_stage =  match (stage) {
+                    NextStage::Config => CurrentStage::Config,
+                    NextStage::Play   => CurrentStage::Play,
+                }; },
+                Err(mpsc::TryRecvError::Empty) => { },
+                Err(mpsc::TryRecvError::Disconnected) => { return Err(()); }
+            }
+            task::yield_now().await;
+        }
+    }
+
 }

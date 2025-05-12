@@ -9,7 +9,8 @@ use crate::{
     RegistryPackets
 };
 use crate::player::{ Player, PlayerJoined };
-use crate::conn::{ ConnStream, PacketReadEvent };
+use crate::conn::ConnStream;
+use crate::conn::packet::{ PacketReadEvent, NextStage };
 use crate::conn::play::ConnStatePlay;
 use crate::world;
 use flywheelmc_common::prelude::*;
@@ -204,22 +205,27 @@ pub(crate) fn handle_state(
             ConnStateLogin::FinishingLogin { uuid, username, props } => {
                 if let Some(C2SLoginPackets::LoginAcknowledged(_)) = conn_stream.read_packet() {
 
+                    if (conn_stream.stage_sender.send(NextStage::Config).is_err()) {
+                        conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                        continue;
+                    }
+
                     // Send server brand
-                    if (conn_stream.send_packet_config(CustomPayloadS2CConfigPacket {
+                    if (unsafe { conn_stream.send_packet_noset(CustomPayloadS2CConfigPacket {
                         channel : Identifier::vanilla_const("brand"),
                         data    : {
                             let mut buf = PacketWriter::new();
                             buf.encode_write(&r_server_brand.0).unwrap();
                             buf.into_inner().into()
                         }
-                    }).is_err()) { continue; }
+                    }) }.is_err()) { continue; }
 
                     // Send registries
-                    if (conn_stream.send_packet_config(
+                    if (unsafe { conn_stream.send_packet_noset(
                         SelectKnownPacksS2CConfigPacket::default()
-                    ).is_err()) { continue; }
+                    ) }.is_err()) { continue; }
                     for packet in &r_reg_packets.0 {
-                        if (conn_stream.send_packet_config(packet).is_err()) { continue; }
+                        if (unsafe { conn_stream.send_packet_noset(packet) }.is_err()) { continue; }
                     }
 
                     // Complete config
@@ -233,7 +239,7 @@ pub(crate) fn handle_state(
                         world::ViewDistance(Ordered::new(NonZeroU8::MIN))
                     ));
 
-                    if (conn_stream.send_packet_config(FinishConfigurationS2CConfigPacket).is_err()) {
+                    if (unsafe { conn_stream.send_packet_noset(FinishConfigurationS2CConfigPacket) }.is_err()) {
                         continue;
                     }
                     *state = ConnStateLogin::FinishingConfig {
@@ -257,8 +263,13 @@ pub(crate) fn handle_state(
                         ew_joined.write(PlayerJoined(entity));
                         drop((username, props,));
 
+                        if (conn_stream.stage_sender.send(NextStage::Play).is_err()) {
+                            conn_stream.shutdown.store(true, AtomicOrdering::Relaxed);
+                            continue;
+                        }
+
                         let view_dist = (r_view_dist.0.get() as usize).into();
-                        if (conn_stream.send_packet_play(LoginS2CPlayPacket {
+                        if (unsafe { conn_stream.send_packet_noset(LoginS2CPlayPacket {
                             entity               : 1.into(),
                             hardcore             : false,
                             dims                 : vec![ r_default_dim.0.clone() ].into(),
@@ -268,7 +279,7 @@ pub(crate) fn handle_state(
                             reduced_debug        : false,
                             respawn_screen       : false,
                             limited_crafting     : true,
-                            dim                  : unsafe { RegEntry::new_unchecked(0) },
+                            dim                  : RegEntry::new_unchecked(0),
                             dim_name             : r_default_dim.0.clone(),
                             seed                 : 0,
                             gamemode             : Gamemode::Adventure,
@@ -279,8 +290,8 @@ pub(crate) fn handle_state(
                             portal_cooldown      : 0.into(),
                             sea_level            : 0.into(),
                             enforce_chat_reports : false
-                        }).is_err()) { continue; }
-                        if (conn_stream.send_packet_play(AddEntityS2CPlayPacket {
+                        }) }.is_err()) { continue; }
+                        if (unsafe { conn_stream.send_packet_noset(AddEntityS2CPlayPacket {
                             id       : 1.into(),
                             uuid     : *uuid,
                             kind     : r_regs.entity_type.get_entry(&Identifier::vanilla_const("player")).unwrap(),
@@ -294,7 +305,7 @@ pub(crate) fn handle_state(
                             vel_x    : 0,
                             vel_y    : 0,
                             vel_z    : 0
-                        }).is_err()) { continue; }
+                        }) }.is_err()) { continue; }
 
                     } else {
                         ew_packet.write(PacketReadEvent {

@@ -62,7 +62,8 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_systems(Update, conn::handshake::handle_state)
             .add_systems(Update, conn::status::handle_state)
             .add_systems(Update, conn::login::handle_state)
-            .add_systems(Update, world::update_view_distance)
+            .add_systems(Update, world::read_settings_updates)
+            .add_systems(Update, world::update_chunk_view)
         ;
     }
 }
@@ -175,7 +176,8 @@ async fn run_listener(
         let (stream, peer_addr,) = listener.accept().await?;
         println!("Connected {}", peer_addr);
         let (read_stream, write_stream,) = stream.into_split();
-        let (write_sender, write_reciever,) = mpsc::unbounded_channel();
+        let (write_sender, write_receiver,) = mpsc::unbounded_channel();
+        let (stage_sender, stage_receiver,) = mpsc::unbounded_channel();
         let shutdown = Arc::new(AtomicBool::new(false));
         AsyncWorld.spawn_bundle((
             conn::Connection {
@@ -185,14 +187,15 @@ async fn run_listener(
             conn::ConnStream {
                 read_stream,
                 write_sender,
-                writer_task  : ManuallyDrop::new(AsyncWorld.spawn_task(
-                    conn::packet::run_packet_writer(
-                        write_reciever,
-                        write_stream,
-                        Arc::clone(&shutdown),
-                        Duration::from_millis(250)
-                    )
-                )),
+                stage_sender,
+                writer_task  : ManuallyDrop::new(AsyncWorld.spawn_task(conn::packet::PacketWriterTask {
+                    current_stage  : conn::packet::CurrentStage::Startup,
+                    write_receiver,
+                    stage_receiver,
+                    stream         : write_stream,
+                    shutdown       : Arc::clone(&shutdown),
+                    send_timeout   : Duration::from_millis(250)
+                }.run())),
                 data_queue   : VecDeque::new(),
                 packet_proc  : PacketProcessing::NONE,
                 packet_index : 0,
