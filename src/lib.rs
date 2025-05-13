@@ -61,6 +61,7 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_systems(Update, conn::handshake::handle_state)
             .add_systems(Update, conn::status::handle_state)
             .add_systems(Update, conn::login::handle_state)
+            .add_systems(Update, conn::play::handle_state)
             .add_systems(Update, world::read_settings_updates)
             .add_systems(Update, world::update_chunk_view)
         ;

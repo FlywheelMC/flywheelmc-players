@@ -270,12 +270,15 @@ pub(crate) fn handle_state(
                         cmds.entity(entity)
                             .remove::<ConnStateLogin>()
                             .insert((
-                                ConnStatePlay,
+                                ConnStatePlay {
+                                    stage : NextStage::Play
+                                },
                                 ConnKeepalive::Sending { sending_at : Instant::now() + KEEPALIVE_INTERVAL }
                             ));
                         ew_joined.write(PlayerJoined(entity));
 
                         if (conn.stage_sender.send(NextStage::Play).is_err()) {
+                            error!("Failed to switch peer {} to play stage", conn.peer_addr);
                             conn.shutdown.store(true, AtomicOrdering::Relaxed);
                             continue;
                         }

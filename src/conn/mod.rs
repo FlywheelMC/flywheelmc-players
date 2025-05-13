@@ -238,7 +238,9 @@ pub(crate) fn timeout_conns(
         }
     }
     for packet::PacketReadEvent { entity, packet, .. } in er_packets.read() {
-        trace!("Received {} {:?}", entity, packet);
+        if let packet::Packet::Play(C2SPlayPackets::ClientTickEnd(_)) = packet {} else {
+            trace!("Received {} {:?}", entity, packet);
+        }
         if let packet::Packet::Play(C2SPlayPackets::KeepAlive(KeepAliveC2SPlayPacket(id)))
             | packet::Packet::Config(C2SConfigPackets::KeepAlive(KeepAliveC2SConfigPacket(id))) = packet
         {

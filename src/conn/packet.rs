@@ -41,7 +41,7 @@ pub(crate) enum CurrentStage {
     Config,
     Play
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum NextStage {
     Config,
     Play
