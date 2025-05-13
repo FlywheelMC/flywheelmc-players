@@ -19,7 +19,6 @@ use protocol::packet::{
 pub(crate) mod handshake;
 pub(crate) mod status;
 pub(crate) mod login;
-pub(crate) mod config;
 pub(crate) mod play;
 
 pub(crate) mod packet;
@@ -41,7 +40,10 @@ pub(crate) struct Connection {
 
 impl Connection {
 
-    pub fn read_packet<T : PrefixedPacketDecode + PacketMeta<BoundT = BoundC2S>>(&mut self) -> Option<T> {
+    pub fn read_packet<T>(&mut self) -> Option<T>
+    where
+        T : PrefixedPacketDecode + PacketMeta<BoundT = BoundC2S>
+    {
         let result = PacketReader::from_raw_queue(self.data_queue.iter().cloned()).and_then(
             |(smalldata, consumed,)| {
                 for _ in 0..consumed {
@@ -74,19 +76,25 @@ impl Connection {
         }
     }
 
-    pub fn send_packet_config<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StageConfig> + Debug>(&mut self, packet : T) -> Result<(), EncodeError> {
-        unsafe { self.send_packet(packet::SetStage::Config, packet) }
-    }
+    pub fn send_packet_config<T>(&mut self, packet : T) -> Result<(), EncodeError>
+    where
+        T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StageConfig>
+    { unsafe { self.send_packet(packet::SetStage::Config, packet) } }
 
-    pub fn send_packet_play<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StagePlay> + Debug>(&mut self, packet : T) -> Result<(), EncodeError> {
-        unsafe { self.send_packet(packet::SetStage::Play, packet) }
-    }
+    pub fn send_packet_play<T>(&mut self, packet : T) -> Result<(), EncodeError>
+    where
+        T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StagePlay>
+    { unsafe { self.send_packet(packet::SetStage::Play, packet) } }
 
-    pub unsafe fn send_packet_noset<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C> + Debug>(&mut self, packet : T) -> Result<(), EncodeError> {
-        unsafe { self.send_packet(packet::SetStage::NoSet, packet) }
-    }
+    pub unsafe fn send_packet_noset<T>(&mut self, packet : T) -> Result<(), EncodeError>
+    where
+        T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C>
+    { unsafe { self.send_packet(packet::SetStage::NoSet, packet) } }
 
-    pub unsafe fn send_packet<T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C> + Debug>(&mut self, set_stage : packet::SetStage, packet : T) -> Result<(), EncodeError> {
+    pub unsafe fn send_packet<T>(&mut self, set_stage : packet::SetStage, packet : T) -> Result<(), EncodeError>
+    where
+        T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C>
+    {
         let mut plaindata = PacketWriter::new();
         if let Err(err) = packet.encode_prefixed(&mut plaindata) {
             error!("Failed to encode packet for peer {}: {}", self.peer_addr, err);
@@ -174,6 +182,10 @@ pub(crate) fn read_conn_streams(
     let mut buf = [0u8; 128];
     for (mut conn,) in &mut q_conns {
         match (conn.read_stream.try_read(&mut buf)) {
+            Ok(0) => {
+                // Disconnected.
+                conn.shutdown.store(true, AtomicOrdering::Relaxed);
+            },
             Ok(count) => {
                 conn.data_queue.reserve(count);
                 for i in 0..count {
