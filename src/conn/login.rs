@@ -9,7 +9,7 @@ use crate::{
     RegistryPackets
 };
 use crate::player::{ Player, PlayerJoined };
-use crate::conn::Connection;
+use crate::conn::{ Connection, ConnKeepalive, KEEPALIVE_INTERVAL };
 use crate::conn::packet::{ PacketReadEvent, NextStage };
 use crate::conn::play::ConnStatePlay;
 use crate::world;
@@ -37,8 +37,10 @@ use protocol::packet::s2c::config::{
 use protocol::packet::s2c::play::{
     LoginS2CPlayPacket,
     AddEntityS2CPlayPacket,
+    PlayerInfoUpdateS2CPlayPacket,
     GameEventS2CPlayPacket,
     Gamemode,
+    PlayerActionEntry,
     GameEvent
 };
 use protocol::packet::processing::{
@@ -77,7 +79,9 @@ pub(crate) enum ConnStateLogin {
         props    : Vec<MojAuthProperty>
     },
     FinishingConfig {
-        uuid : Uuid
+        uuid     : Uuid,
+        username : String,
+        props    : Vec<MojAuthProperty>
     }
 }
 
@@ -111,9 +115,10 @@ pub(crate) fn handle_state(
                     }) }.is_err()) { continue; }
                     conn.packet_proc.compression = CompressionMode::ZLib { threshold };
 
+                    trace!("Exchanging public-key with peer {}...", conn.peer_addr);
                     // Share keys.
                     let (private_key, public_key) = generate_key_pair::<1024>();
-                    let verify_token              = array::from_fn::<_, 4, _>(|_| rand::random::<u8>());
+                    let verify_token              = array::from_fn::<_, 4, _>(|_| random::<u8>());
                     if (unsafe { conn.send_packet_noset(HelloS2CLoginPacket {
                         server_id    : r_server_id.0.to_string(),
                         public_key   : public_key.der_bytes().into(),
@@ -149,7 +154,9 @@ pub(crate) fn handle_state(
                         continue;
                     };
                     conn.packet_proc.secret_cipher = SecretCipher::from_key_bytes(&secret_key);
+                    trace!("Got private-key from peer {}", conn.peer_addr);
 
+                    trace!("Validating mojauth of peer {}...", conn.peer_addr);
                     // Check mojang authentication
                     *state = if (r_mojauth.0) {
                         let username          = mem::replace(username, String::new());
@@ -177,6 +184,7 @@ pub(crate) fn handle_state(
                 if let Poll::Ready(result) = fut.poll() {
                     match (result) {
                         Ok(mojauth) => {
+                            trace!("Peer {} authenticated as {} ({})", conn.peer_addr, mojauth.name, mojauth.uuid);
                             *state = ConnStateLogin::HandleMojauth { mojauth }
                         },
                         Err(_) => {
@@ -235,32 +243,36 @@ pub(crate) fn handle_state(
                     cmds.entity(entity).insert((
                         Player {
                             uuid     : *uuid,
-                            username : mem::replace(username, String::new()),
-                            props    : mem::replace(props, Vec::new())
+                            username : username.clone(),
+                            props    : props.clone()
                         },
                         world::ChunkCentre(Dirty::new_dirty(Vec2::<i32>::ZERO)),
                         world::ViewDistance(Ordered::new(NonZeroU8::MIN))
                     ));
-                    drop((username, props,));
 
                     if (unsafe { conn.send_packet_noset(FinishConfigurationS2CConfigPacket) }.is_err()) {
                         continue;
                     }
                     *state = ConnStateLogin::FinishingConfig {
-                        uuid : *uuid
+                        uuid     : *uuid,
+                        username : mem::replace(username, String::new()),
+                        props    : mem::replace(props, Vec::new())
                     }
 
                 }
             },
 
 
-            ConnStateLogin::FinishingConfig { uuid } => {
+            ConnStateLogin::FinishingConfig { uuid, username, props } => {
                 if let Some(packet) = conn.read_packet() {
                     if let C2SConfigPackets::FinishConfiguration(_) = packet {
 
                         cmds.entity(entity)
                             .remove::<ConnStateLogin>()
-                            .insert(ConnStatePlay);
+                            .insert((
+                                ConnStatePlay,
+                                ConnKeepalive::Sending { sending_at : Instant::now() + KEEPALIVE_INTERVAL }
+                            ));
                         ew_joined.write(PlayerJoined(entity));
 
                         if (conn.stage_sender.send(NextStage::Play).is_err()) {
@@ -291,6 +303,20 @@ pub(crate) fn handle_state(
                             sea_level            : 0.into(),
                             enforce_chat_reports : false
                         }) }.is_err()) { continue; }
+
+                        if (unsafe { conn.send_packet_noset(PlayerInfoUpdateS2CPlayPacket {
+                            actions : vec![(*uuid, vec![
+                                PlayerActionEntry::AddPlayer {
+                                    name  : username.clone(),
+                                    props : mem::replace(props, Vec::new())
+                                        .into_iter()
+                                        .map(|prop| prop.into())
+                                        .collect::<Vec<_>>()
+                                        .into()
+                                }
+                            ],)],
+                        }) }.is_err()) { continue; }
+
                         if (unsafe { conn.send_packet_noset(AddEntityS2CPlayPacket {
                             id       : 1.into(),
                             uuid     : *uuid,
@@ -306,6 +332,7 @@ pub(crate) fn handle_state(
                             vel_y    : 0,
                             vel_z    : 0
                         }) }.is_err()) { continue; }
+
                         if (unsafe { conn.send_packet_noset(GameEventS2CPlayPacket {
                             event : GameEvent::WaitForChunks,
                             value : 0.0

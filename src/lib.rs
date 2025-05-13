@@ -7,7 +7,6 @@
 
 use flywheelmc_common::prelude::*;
 use protocol::packet::s2c::config::RegistryDataS2CConfigPacket;
-use protocol::packet::processing::PacketProcessing;
 use protocol::value::{ DimType, Identifier, Text, TextComponent, EntityType };
 use protocol::registry::Registry;
 pub use protocol::{ MINECRAFT_VERSION, PROTOCOL_VERSION };

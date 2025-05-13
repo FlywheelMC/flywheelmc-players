@@ -51,7 +51,7 @@ pub(crate) enum NextStage {
 pub(crate) struct PacketWriterTask {
     pub(crate) peer_addr      : SocketAddr,
     pub(crate) current_stage  : CurrentStage,
-    pub(crate) write_receiver : mpsc::UnboundedReceiver<(SetStage, Vec<u8>,)>,
+    pub(crate) write_receiver : mpsc::UnboundedReceiver<(ShortName<'static>, SetStage, Vec<u8>,)>,
     pub(crate) stage_receiver : mpsc::UnboundedReceiver<NextStage>,
     pub(crate) stream         : OwnedWriteHalf,
     pub(crate) shutdown       : Arc<AtomicBool>,
@@ -68,7 +68,8 @@ impl PacketWriterTask {
     async fn run_inner(mut self) -> Result<(), ()> {
         loop {
             match (self.write_receiver.try_recv()) {
-                Ok((set_stage, packet,)) => {
+                Ok((packet_type, set_stage, packet,)) => {
+                    trace!("Sending packet {} to peer {}...", packet_type, self.peer_addr);
                     match (set_stage) {
                         SetStage::NoSet  => { },
                         SetStage::Config => { match (self.current_stage) {
@@ -76,13 +77,13 @@ impl PacketWriterTask {
                             CurrentStage::Startup
                                 | CurrentStage::Play
                             => {
-                                todo!("switch to play")
+                                todo!("switch to config")
                             }
                         }; },
                         SetStage::Play => { match (self.current_stage) {
                             CurrentStage::Startup => { self.current_stage = CurrentStage::Play; },
                             CurrentStage::Config  => {
-                                todo!("switch to config")
+                                todo!("switch to play")
                             },
                             CurrentStage::Play => { }
                         } }
