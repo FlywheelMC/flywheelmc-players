@@ -1,6 +1,7 @@
 #![feature(
-    let_chains,
+    // Language
     auto_traits,
+    let_chains,
     negative_impls
 )]
 
