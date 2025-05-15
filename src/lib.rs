@@ -74,7 +74,7 @@ impl Plugin for FlywheelMcPlayersPlugin {
 struct ListenAddrs(SocketAddrs);
 
 #[derive(Resource)]
-struct ServerMotd(Text);
+pub struct ServerMotd(pub Text);
 
 #[derive(Resource)]
 struct ServerVersion(Cow<'static, str>);
@@ -100,7 +100,7 @@ struct DefaultDim(Identifier, DimType);
 #[derive(Resource)]
 struct MaxViewDistance(NonZeroU8);
 
-#[derive(Resource)]
+#[derive(Resource)] // TODO: Remove this
 struct LobbyYSections(u32);
 
 #[derive(Resource)]
