@@ -90,11 +90,11 @@ pub struct SectionWriter<'l> {
 impl<'l> SectionWriter<'l> {
 
     #[inline]
-    pub fn set(&mut self, linear_xyz : u16, block : RegEntry<BlockState>) -> () {
+    pub fn set(&mut self, linear_xyz : u16, block : RegEntry<BlockState>) {
         self.blocks.insert(linear_xyz, block);
     }
 
-    pub fn set_xyz(&mut self, dx : u8, dy : u8, dz : u8, block : RegEntry<BlockState>) -> () {
+    pub fn set_xyz(&mut self, dx : u8, dy : u8, dz : u8, block : RegEntry<BlockState>) {
         self.set(in_section_block_linearise(dx, dy, dz), block)
     }
 
@@ -146,7 +146,7 @@ fn in_section_block_delinearise(l : u16) -> [u8; 3] {
     ]
 }
 
-fn section_write_data_run(data : &mut Vec<u8>, len : u16, block : RegEntry<BlockState>) -> () {
+fn section_write_data_run(data : &mut Vec<u8>, len : u16, block : RegEntry<BlockState>) {
     if (len > 0) {
         data.extend(len.to_ne_bytes());
         Var32::new(block.id() as i32).extend_bytes(data);

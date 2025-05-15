@@ -86,6 +86,7 @@ pub(crate) enum ConnStateLogin {
 }
 
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_state(
     mut cmds           : Commands,
     mut q_conns        : Query<(Entity, &mut Connection, &mut ConnStateLogin,)>,
@@ -159,7 +160,7 @@ pub(crate) fn handle_state(
                     trace!("Validating mojauth of peer {}...", conn.peer_addr);
                     // Check mojang authentication
                     *state = if (r_mojauth.0) {
-                        let username          = mem::replace(username, String::new());
+                        let username          = mem::take(username);
                         let server_id         = r_server_id.0.clone();
                         let secret_cipher_key = conn.packet_proc.secret_cipher.key().unwrap().to_vec();
                         let public_key        = public_key.clone();
@@ -173,7 +174,7 @@ pub(crate) fn handle_state(
                             ).await
                         }) }
                     } else {
-                        let mojauth = MojAuth::offline(mem::replace(username, String::new()));
+                        let mojauth = MojAuth::offline(mem::take(username));
                         ConnStateLogin::HandleMojauth { mojauth }
                     };
                 }
@@ -206,8 +207,8 @@ pub(crate) fn handle_state(
                 // TODO: Check already logged in network (max 5?)
                 *state = ConnStateLogin::FinishingLogin {
                     uuid     : mojauth.uuid,
-                    username : mem::replace(&mut mojauth.name, String::new()),
-                    props    : mem::replace(&mut mojauth.props, Vec::new())
+                    username : mem::take(&mut mojauth.name),
+                    props    : mem::take(&mut mojauth.props)
                 };
             },
 
@@ -255,8 +256,8 @@ pub(crate) fn handle_state(
                     }
                     *state = ConnStateLogin::FinishingConfig {
                         uuid     : *uuid,
-                        username : mem::replace(username, String::new()),
-                        props    : mem::replace(props, Vec::new())
+                        username : mem::take(username),
+                        props    : mem::take(props)
                     }
 
                 }
@@ -285,7 +286,7 @@ pub(crate) fn handle_state(
 
                         let view_dist = (r_view_dist.0.get() as usize).into();
                         if (unsafe { conn.send_packet_noset(LoginS2CPlayPacket {
-                            entity               : 1.into(),
+                            entity               : 1,
                             hardcore             : false,
                             dims                 : vec![ r_default_dim.0.clone() ].into(),
                             max_players          : 0.into(),
@@ -311,7 +312,7 @@ pub(crate) fn handle_state(
                             actions : vec![(*uuid, vec![
                                 PlayerActionEntry::AddPlayer {
                                     name  : username.clone(),
-                                    props : mem::replace(props, Vec::new())
+                                    props : mem::take(props)
                                         .into_iter()
                                         .map(|prop| prop.into())
                                         .collect::<Vec<_>>()

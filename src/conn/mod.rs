@@ -146,7 +146,7 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = unsafe { ManuallyDrop::take(&mut self.writer_task) }.cancel();
+        task::block_on(unsafe { ManuallyDrop::take(&mut self.writer_task) }.cancel());
     }
 }
 
@@ -201,8 +201,8 @@ pub(crate) fn read_conn_streams(
             },
             Ok(count) => {
                 conn.data_queue.reserve(count);
-                for i in 0..count {
-                    if let Ok(b) = conn.packet_proc.secret_cipher.decrypt_u8(buf[i]) {
+                for b1 in buf {
+                    if let Ok(b) = conn.packet_proc.secret_cipher.decrypt_u8(b1) {
                         conn.data_queue.push_back(b);
                     } else {
                         error!("Failed to decrypt packet from peer {}", conn.peer_addr);
@@ -243,21 +243,20 @@ pub(crate) fn timeout_conns(
         }
         if let packet::Packet::Play(C2SPlayPackets::KeepAlive(KeepAliveC2SPlayPacket(id)))
             | packet::Packet::Config(C2SConfigPackets::KeepAlive(KeepAliveC2SConfigPacket(id))) = packet
+            && let Ok((conn, mut keepalive,)) = q_conns.get_mut(*entity)
         {
-            if let Ok((conn, mut keepalive,)) = q_conns.get_mut(*entity) {
-                match (*keepalive) {
-                    ConnKeepalive::Sending { .. } => {
+            match (*keepalive) {
+                ConnKeepalive::Sending { .. } => {
+                    error!("Received unordered keepalive from peer {}", conn.peer_addr);
+                    conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                },
+                ConnKeepalive::Waiting { expected_id, .. } => {
+                    if (*id == expected_id) {
+                        trace!("Received keepalive {} from peer {}", id, conn.peer_addr);
+                        *keepalive = ConnKeepalive::Sending { sending_at : Instant::now() + KEEPALIVE_INTERVAL };
+                    } else {
                         error!("Received unordered keepalive from peer {}", conn.peer_addr);
                         conn.shutdown.store(true, AtomicOrdering::Relaxed);
-                    },
-                    ConnKeepalive::Waiting { expected_id, .. } => {
-                        if (*id == expected_id) {
-                            trace!("Received keepalive {} from peer {}", id, conn.peer_addr);
-                            *keepalive = ConnKeepalive::Sending { sending_at : Instant::now() + KEEPALIVE_INTERVAL };
-                        } else {
-                            error!("Received unordered keepalive from peer {}", conn.peer_addr);
-                            conn.shutdown.store(true, AtomicOrdering::Relaxed);
-                        }
                     }
                 }
             }
@@ -275,7 +274,7 @@ pub(crate) fn shutdown_conns(
             if let Some(mut player) = player {
                 ew_left.write(PlayerLeft {
                     uuid     : player.uuid,
-                    username : mem::replace(&mut player.username, String::new())
+                    username : mem::take(&mut player.username)
                 });
                 info!("Player {} ({}) disconnected.", player.username(), player.uuid());
             }

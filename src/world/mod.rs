@@ -49,15 +49,11 @@ pub(crate) fn read_settings_updates(
         r_view_dist : Res<MaxViewDistance>
 ) {
     for PacketReadEvent { entity, packet, index } in er_packet.read() {
-        if let Ok((mut view_dist,)) = q_conns.get_mut(*entity) {
-            if let Packet::Config(C2SConfigPackets::ClientInformation(ClientInformationC2SConfigPacket { info }))
-                | Packet::Play(C2SPlayPackets::ClientInformation(ClientInformationC2SPlayPacket { info })) = packet
-            {
-                if let Some(value) = NonZeroU8::new(info.view_distance) {
-                    Ordered::set(&mut view_dist.0, value.min(r_view_dist.0), *index);
-                }
-            }
-        }
+        if let Ok((mut view_dist,)) = q_conns.get_mut(*entity)
+            && let    Packet::Config(C2SConfigPackets::ClientInformation(ClientInformationC2SConfigPacket { info }))
+                    | Packet::Play(C2SPlayPackets::ClientInformation(ClientInformationC2SPlayPacket { info })) = packet
+            && let Some(value) = NonZeroU8::new(info.view_distance)
+        { Ordered::set(&mut view_dist.0, value.min(r_view_dist.0), *index); }
     }
 }
 pub(crate) fn update_chunk_view(
