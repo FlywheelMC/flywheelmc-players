@@ -117,11 +117,11 @@ pub(crate) fn handle_state(
                     if let Some(reject) = &r_reject {
                         conn.kick(&reject.0);
                     }
-                    if let Some(max_conns) = &r_max_conns {
-                        if (ACTIVE_CONNS.load(AtomicOrdering::Relaxed) > max_conns.0) {
-                            conn.kick("Server is full");
-                            continue;
-                        }
+                    if let Some(max_conns) = &r_max_conns
+                        && (ACTIVE_CONNS.load(AtomicOrdering::Relaxed) > max_conns.0)
+                    {
+                        conn.kick("Server is full");
+                        continue;
                     }
 
                     // Set compression.
@@ -294,10 +294,7 @@ pub(crate) fn handle_state(
                                 },
                                 ConnKeepalive::Sending { sending_at : Instant::now() + KEEPALIVE_INTERVAL }
                             ));
-                        ew_joined.write(PlayerJoined {
-                            entity,
-                            _private : ()
-                        });
+                        ew_joined.write(PlayerJoined { entity });
 
                         if (conn.stage_sender.send(NextStage::Play).is_err()) {
                             error!("Failed to switch peer {} to play stage", conn.peer_addr);

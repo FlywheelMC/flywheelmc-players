@@ -19,16 +19,16 @@ impl Player {
 
 
 #[derive(Event)]
+#[non_exhaustive]
 pub struct PlayerJoined {
-    pub        entity   : Entity,
-    pub(crate) _private : ()
+    pub entity   : Entity
 }
 
 #[derive(Event)]
+#[non_exhaustive]
 pub struct PlayerLeft {
-    pub        uuid     : Uuid,
-    pub        username : String,
-    pub(crate) _private : ()
+    pub uuid     : Uuid,
+    pub username : String
 }
 
 

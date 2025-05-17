@@ -11,6 +11,7 @@ pub struct PacketReadEvent {
 }
 
 
+#[expect(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Packet {
     Config(C2SConfigPackets),

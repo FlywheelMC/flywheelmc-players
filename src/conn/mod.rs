@@ -117,7 +117,7 @@ impl Connection {
                     DecodeError::EndOfBuffer => { },
                     DecodeError::InvalidData(err) => {
                         error!("Failed to decode packet from peer {}: {}", self.peer_addr, err);
-                        self.kick(&format!("Bad packet: {}", err));
+                        self.kick(&format!("Bad packet: {err}"));
                     }
                     DecodeError::UnconsumedBuffer => {
                         error!("Failed to decode packet from peer {}: {}", self.peer_addr, DecodeError::UnconsumedBuffer);
@@ -277,14 +277,14 @@ pub(crate) fn read_conn_streams(
                         conn.data_queue.push_back(b);
                     } else {
                         error!("Failed to decrypt packet from peer {}", conn.peer_addr);
-                        conn.kick(&format!("Bad packet: could not decrypt"));
+                        conn.kick("Bad packet: could not decrypt");
                     }
                 }
             },
             Err(err) if (err.kind() == io::ErrorKind::WouldBlock) => { },
             Err(err) => {
                 error!("Failed to read packet from peer {}", err);
-                conn.kick(&format!("Bad packet: {}", err));
+                conn.kick(&format!("Bad packet: {err}"));
             }
         }
     }
@@ -348,8 +348,7 @@ pub(crate) fn close_conns(
                 info!("Player {} ({}) disconnected.", player.username(), player.uuid());
                 ew_left.write(PlayerLeft {
                     uuid     : player.uuid,
-                    username : mem::take(&mut player.username),
-                    _private : ()
+                    username : mem::take(&mut player.username)
                 });
             }
             debug!("Peer {} disconnected.", conn.peer_addr);
