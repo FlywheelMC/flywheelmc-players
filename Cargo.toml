@@ -14,7 +14,7 @@ keywords   = [ "flywheel", "mc", "minecraft", "game" ]
 categories = [ "authentication", "network-programming" ]
 
 edition      = "2024"
-rust-version = "1.87"
+rust-version = "1.89"
 
 
 [lints.rust]

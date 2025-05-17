@@ -276,7 +276,10 @@ pub(crate) fn handle_state(
                                 },
                                 ConnKeepalive::Sending { sending_at : Instant::now() + KEEPALIVE_INTERVAL }
                             ));
-                        ew_joined.write(PlayerJoined(entity));
+                        ew_joined.write(PlayerJoined {
+                            entity,
+                            _private : ()
+                        });
 
                         if (conn.stage_sender.send(NextStage::Play).is_err()) {
                             error!("Failed to switch peer {} to play stage", conn.peer_addr);

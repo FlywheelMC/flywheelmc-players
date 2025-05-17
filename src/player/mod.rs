@@ -1,4 +1,5 @@
 use flywheelmc_common::prelude::*;
+use protocol::value::Text;
 use protocol::mojang::auth_verify::MojAuthProperty;
 
 
@@ -18,10 +19,21 @@ impl Player {
 
 
 #[derive(Event)]
-pub struct PlayerJoined(pub Entity);
+pub struct PlayerJoined {
+    pub        entity   : Entity,
+    pub(crate) _private : ()
+}
 
 #[derive(Event)]
 pub struct PlayerLeft {
-    pub uuid     : Uuid,
-    pub username : String
+    pub        uuid     : Uuid,
+    pub        username : String,
+    pub(crate) _private : ()
+}
+
+
+#[derive(Event)]
+pub struct KickPlayer {
+    pub entity  : Entity,
+    pub message : Text
 }

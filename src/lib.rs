@@ -16,8 +16,7 @@ pub use protocol::{ MINECRAFT_VERSION, PROTOCOL_VERSION };
 mod conn;
 pub use conn::packet::{ PacketReadEvent, Packet };
 
-mod player;
-pub use player::{ Player, PlayerJoined, PlayerLeft };
+pub mod player;
 
 mod world;
 
@@ -42,6 +41,7 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_event::<conn::packet::PacketReadEvent>()
             .add_event::<player::PlayerJoined>()
             .add_event::<player::PlayerLeft>()
+            .add_event::<player::KickPlayer>()
             .insert_resource(ListenAddrs(self.listen_addrs.clone()))
             .insert_resource(ServerMotd(self.motd.clone()))
             .insert_resource(ServerVersion(self.version.clone()))

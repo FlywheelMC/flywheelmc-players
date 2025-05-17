@@ -44,7 +44,7 @@ pub(crate) struct Connection {
     pub(crate) read_stream  : OwnedReadHalf,
     pub(crate) write_sender : mpsc::UnboundedSender<(ShortName<'static>, packet::SetStage, Vec<u8>,)>,
     pub(crate) stage_sender : mpsc::UnboundedSender<packet::NextStage>,
-    pub(crate) writer_task  : ManuallyDrop<Task<()>>,
+    pub(crate) writer_task  : Task<()>,
     pub(crate) data_queue   : VecDeque<u8>,
     pub(crate) packet_proc  : PacketProcessing,
     pub(crate) packet_index : u128,
@@ -67,7 +67,7 @@ impl Connection {
 
     pub fn read_packet<T>(&mut self) -> Option<T>
     where
-        T : PrefixedPacketDecode + PacketMeta<BoundT = BoundC2S>
+        T : PrefixedPacketDecode + PacketMeta<BoundT = BoundC2S> + Debug
     {
         let result = PacketReader::from_raw_queue(self.data_queue.iter().cloned()).and_then(
             |(smalldata, consumed,)| {
@@ -80,7 +80,10 @@ impl Connection {
             T::decode_prefixed(&mut plaindata)
         });
         match (result) {
-            Ok(packet) => Some(packet),
+            Ok(packet) => {
+                trace!("Received packet {:?} from peer {}", packet, self.peer_addr);
+                Some(packet)
+            },
             Err(err) => {
                 match (err) {
                     DecodeError::EndOfBuffer => { },
@@ -144,12 +147,6 @@ impl Connection {
 
 }
 
-impl Drop for Connection {
-    fn drop(&mut self) {
-        task::block_on(unsafe { ManuallyDrop::take(&mut self.writer_task) }.cancel());
-    }
-}
-
 
 pub(crate) async fn run_listener(
     listen_addrs : SocketAddrs
@@ -170,7 +167,7 @@ pub(crate) async fn run_listener(
                 read_stream,
                 write_sender,
                 stage_sender,
-                writer_task  : ManuallyDrop::new(AsyncWorld.spawn_task(packet::PacketWriterTask {
+                writer_task  : AsyncWorld.spawn_task(packet::PacketWriterTask {
                     peer_addr,
                     current_stage  : packet::CurrentStage::Startup,
                     write_receiver,
@@ -178,7 +175,7 @@ pub(crate) async fn run_listener(
                     stream         : write_stream,
                     shutdown       : Arc::clone(&shutdown),
                     send_timeout   : Duration::from_millis(250)
-                }.run())),
+                }.run()),
                 data_queue   : VecDeque::new(),
                 packet_proc  : PacketProcessing::NONE,
                 packet_index : 0,
@@ -192,8 +189,8 @@ pub(crate) async fn run_listener(
 pub(crate) fn read_conn_streams(
     mut q_conns : Query<(&mut Connection,)>
 ) {
-    let mut buf = [0u8; 128];
     for (mut conn,) in &mut q_conns {
+        let mut buf = [0u8; 128];
         match (conn.read_stream.try_read(&mut buf)) {
             Ok(0) => {
                 // Disconnected.
@@ -201,8 +198,8 @@ pub(crate) fn read_conn_streams(
             },
             Ok(count) => {
                 conn.data_queue.reserve(count);
-                for b1 in buf {
-                    if let Ok(b) = conn.packet_proc.secret_cipher.decrypt_u8(b1) {
+                for b1 in &buf[..count] {
+                    if let Ok(b) = conn.packet_proc.secret_cipher.decrypt_u8(*b1) {
                         conn.data_queue.push_back(b);
                     } else {
                         error!("Failed to decrypt packet from peer {}", conn.peer_addr);
@@ -218,6 +215,8 @@ pub(crate) fn read_conn_streams(
         }
     }
 }
+
+// TODO: timeout logins
 
 pub(crate) fn timeout_conns(
     mut q_conns    : Query<(&mut Connection, &mut ConnKeepalive,), (With<play::ConnStatePlay>,)>,
@@ -274,7 +273,8 @@ pub(crate) fn shutdown_conns(
             if let Some(mut player) = player {
                 ew_left.write(PlayerLeft {
                     uuid     : player.uuid,
-                    username : mem::take(&mut player.username)
+                    username : mem::take(&mut player.username),
+                    _private : ()
                 });
                 info!("Player {} ({}) disconnected.", player.username(), player.uuid());
             }
