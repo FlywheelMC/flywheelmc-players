@@ -45,6 +45,9 @@ const KEEPALIVE_TIMEOUT  : Duration = Duration::from_millis(5000);
 const MAX_KEEPALIVE_ID   : u64      = i64::MAX as u64;
 
 
+static ACTIVE_CONNS : AtomicUsize = AtomicUsize::new(0);
+
+
 enum RealStage {
     Handshake,
     Status,
@@ -224,6 +227,7 @@ pub(crate) async fn run_listener(
     pass!("Started game server on {}.", listen_addrs);
     loop {
         let (stream, peer_addr,) = listener.accept().await?;
+        ACTIVE_CONNS.fetch_add(1, AtomicOrdering::Relaxed);
         debug!("Incoming connection from {}.", peer_addr);
         let (read_stream, write_stream,) = stream.into_split();
         let (write_sender, write_receiver,) = mpsc::unbounded_channel();
@@ -341,15 +345,16 @@ pub(crate) fn close_conns(
     for (entity, mut conn, player,) in &mut q_conns {
         if (conn.closing) {
             if let Some(mut player) = player {
+                info!("Player {} ({}) disconnected.", player.username(), player.uuid());
                 ew_left.write(PlayerLeft {
                     uuid     : player.uuid,
                     username : mem::take(&mut player.username),
                     _private : ()
                 });
-                info!("Player {} ({}) disconnected.", player.username(), player.uuid());
             }
             debug!("Peer {} disconnected.", conn.peer_addr);
             cmds.entity(entity).despawn();
+            ACTIVE_CONNS.fetch_sub(1, AtomicOrdering::Relaxed);
         }
         match (conn.close_receiver.try_recv()) {
             Ok(reason) => { conn.kick(&reason); },

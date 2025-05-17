@@ -11,7 +11,7 @@ use crate::{
     RegistryPackets
 };
 use crate::player::{ Player, PlayerJoined };
-use crate::conn::{ Connection, ConnKeepalive, RealStage, KEEPALIVE_INTERVAL };
+use crate::conn::{ Connection, ConnKeepalive, RealStage, KEEPALIVE_INTERVAL, ACTIVE_CONNS };
 use crate::conn::packet::{ PacketReadEvent, NextStage };
 use crate::conn::play::ConnStatePlay;
 use crate::world;
@@ -117,7 +117,12 @@ pub(crate) fn handle_state(
                     if let Some(reject) = &r_reject {
                         conn.kick(&reject.0);
                     }
-                    // TODO: Respect max conns.
+                    if let Some(max_conns) = &r_max_conns {
+                        if (ACTIVE_CONNS.load(AtomicOrdering::Relaxed) > max_conns.0) {
+                            conn.kick("Server is full");
+                            continue;
+                        }
+                    }
 
                     // Set compression.
                     let threshold = r_threshold.0;
