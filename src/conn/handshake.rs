@@ -1,4 +1,4 @@
-use crate::conn::Connection;
+use crate::conn::{ Connection, RealStage };
 use crate::conn::status::ConnStateStatus;
 use crate::conn::login::ConnStateLogin;
 use flywheelmc_common::prelude::*;
@@ -25,9 +25,13 @@ pub(crate) fn handle_state(
             entity.remove::<ConnStateHandshake>();
             match (intended_stage) {
 
-                IntendedStage::Status => { entity.insert(ConnStateStatus::default()); },
+                IntendedStage::Status => {
+                    conn.real_stage = RealStage::Status;
+                    entity.insert(ConnStateStatus::default());
+                },
 
                 IntendedStage::Login | IntendedStage::Transfer => {
+                    conn.real_stage = RealStage::Login;
                     // TODO: Check protocol_version
                     entity.insert(ConnStateLogin::WaitingForHello);
                 }

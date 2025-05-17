@@ -61,14 +61,14 @@ pub(crate) fn update_chunk_view(
 ) {
     for (mut conn, mut chunk_centre, mut view_dist,) in &mut q_conns {
         if (Dirty::take_dirty(&mut chunk_centre.0)) {
-            trace!("Updating chunk centre of peer {} to <{}, {}>", conn.peer_addr, chunk_centre.0.x, chunk_centre.0.y);
+            trace!("Updating chunk centre of peer {} to <{}, {}>", conn.peer_addr(), chunk_centre.0.x, chunk_centre.0.y);
             let _ = conn.send_packet_play(SetChunkCacheCenterS2CPlayPacket {
                 chunk_x : chunk_centre.0.x.into(),
                 chunk_z : chunk_centre.0.y.into(),
             });
         }
         if (Ordered::take_dirty(&mut view_dist.0)) {
-            trace!("Updating chunk radius of peer {} to {}", conn.peer_addr, *view_dist.0);
+            trace!("Updating chunk radius of peer {} to {}", conn.peer_addr(), *view_dist.0);
             let _ = conn.send_packet_play(SetChunkCacheRadiusS2CPlayPacket {
                 view_dist : (view_dist.0.get() as i32).into()
             });

@@ -21,7 +21,11 @@ pub mod player;
 mod world;
 
 
+static KICK_FOOTER : SRwLock<Text> = SRwLock::new(Text::new());
+
+
 pub struct FlywheelMcPlayersPlugin {
+    pub max_conns          : Option<usize>,
     pub listen_addrs       : SocketAddrs,
     pub motd               : Text,
     pub version            : Cow<'static, str>,
@@ -30,6 +34,7 @@ pub struct FlywheelMcPlayersPlugin {
     pub mojauth_enabled    : bool,
     pub server_id          : Cow<'static, str>,
     pub server_brand       : Cow<'static, str>,
+    pub kick_footer        : Text,
     pub default_dim_id     : Identifier,
     pub default_dim_type   : DimType,
     pub max_view_distance  : NonZeroU8
@@ -42,6 +47,7 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_event::<player::PlayerJoined>()
             .add_event::<player::PlayerLeft>()
             .add_event::<player::KickPlayer>()
+            .insert_resource(RejectNewConns(Cow::Borrowed("Server still starting...")))
             .insert_resource(ListenAddrs(self.listen_addrs.clone()))
             .insert_resource(ServerMotd(self.motd.clone()))
             .insert_resource(ServerVersion(self.version.clone()))
@@ -58,17 +64,26 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_systems(Startup, start_listener)
             .add_systems(Update, conn::read_conn_streams)
             .add_systems(Update, conn::timeout_conns)
-            .add_systems(Update, conn::shutdown_conns)
+            .add_systems(Update, conn::close_conns)
             .add_systems(Update, conn::handshake::handle_state)
             .add_systems(Update, conn::status::handle_state)
             .add_systems(Update, conn::login::handle_state)
             .add_systems(Update, conn::play::handle_state)
             .add_systems(Update, world::read_settings_updates)
-            .add_systems(Update, world::update_chunk_view)
-        ;
+            .add_systems(Update, world::update_chunk_view);
+        if let Some(max_conns) = self.max_conns {
+            app.insert_resource(MaxConnCount(max_conns));
+        }
+        *KICK_FOOTER.write().unwrap() = self.kick_footer.clone();
     }
 }
 
+
+#[derive(Resource)]
+pub struct RejectNewConns(Cow<'static, str>);
+
+#[derive(Resource)]
+struct MaxConnCount(usize);
 
 #[derive(Resource)]
 struct ListenAddrs(SocketAddrs);

@@ -24,7 +24,7 @@ pub(crate) fn handle_state(
                         state.stage = NextStage::Play;
                         if (conn.stage_sender.send(NextStage::Play).is_err()) {
                             error!("Failed to switch peer {} to play stage", conn.peer_addr);
-                            conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                            conn.kick("Could not switch to play stage");
                         }
                         trace!("Switched peer {} to play stage", conn.peer_addr);
                     } else {
@@ -43,7 +43,7 @@ pub(crate) fn handle_state(
                         state.stage = NextStage::Config;
                         if (conn.stage_sender.send(NextStage::Config).is_err()) {
                             error!("Failed to switch peer {} to config stage", conn.peer_addr);
-                            conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                            conn.kick("Could not switch to config stage");
                         }
                         trace!("Switched peer {} to config stage", conn.peer_addr);
                     } else {

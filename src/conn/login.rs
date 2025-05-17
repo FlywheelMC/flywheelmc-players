@@ -1,5 +1,7 @@
 use crate::{
     CompressionThreshold,
+    RejectNewConns,
+    MaxConnCount,
     MojauthEnabled,
     ServerId,
     ServerBrand,
@@ -9,7 +11,7 @@ use crate::{
     RegistryPackets
 };
 use crate::player::{ Player, PlayerJoined };
-use crate::conn::{ Connection, ConnKeepalive, KEEPALIVE_INTERVAL };
+use crate::conn::{ Connection, ConnKeepalive, RealStage, KEEPALIVE_INTERVAL };
 use crate::conn::packet::{ PacketReadEvent, NextStage };
 use crate::conn::play::ConnStatePlay;
 use crate::world;
@@ -90,6 +92,8 @@ pub(crate) enum ConnStateLogin {
 pub(crate) fn handle_state(
     mut cmds           : Commands,
     mut q_conns        : Query<(Entity, &mut Connection, &mut ConnStateLogin,)>,
+        r_reject       : Option<Res<RejectNewConns>>,
+        r_max_conns    : Option<Res<MaxConnCount>>,
         r_threshold    : Res<CompressionThreshold>,
         r_mojauth      : Res<MojauthEnabled>,
         r_server_id    : Res<ServerId>,
@@ -102,12 +106,18 @@ pub(crate) fn handle_state(
     mut ew_packet      : EventWriter<PacketReadEvent>
 ) {
     for (entity, mut conn, mut state) in &mut q_conns {
+        if (conn.closing) { continue; }
         match (&mut*state) {
 
 
             ConnStateLogin::WaitingForHello => {
                 if let Some(C2SLoginPackets::Hello(HelloC2SLoginPacket { username, .. })) = conn.read_packet() {
                     debug!("Peer {} is logging in...", conn.peer_addr);
+
+                    if let Some(reject) = &r_reject {
+                        conn.kick(&reject.0);
+                    }
+                    // TODO: Respect max conns.
 
                     // Set compression.
                     let threshold = r_threshold.0;
@@ -144,14 +154,14 @@ pub(crate) fn handle_state(
                         && (decrypted_verify_token == verify_token.as_slice()) {
                     } else {
                         error!("Failed to verify keys from peer {}", conn.peer_addr);
-                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                        conn.kick("Key exchange verification failed");
                         continue;
                     }
 
                     // Decrypt the secret key and construct a cipher.
                     let Ok(secret_key) = private_key.decrypt(packet.secret_key.as_slice()) else {
                         error!("Failed to decrypt keys from peer {}", conn.peer_addr);
-                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                        conn.kick("Failed to decrypt secret key");
                         continue;
                     };
                     conn.packet_proc.secret_cipher = SecretCipher::from_key_bytes(&secret_key);
@@ -188,9 +198,9 @@ pub(crate) fn handle_state(
                             trace!("Peer {} authenticated as {} ({})", conn.peer_addr, mojauth.name, mojauth.uuid);
                             *state = ConnStateLogin::HandleMojauth { mojauth }
                         },
-                        Err(_) => {
-                            error!("Failed to authenticate peer {}", conn.peer_addr);
-                            conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                        Err(err) => {
+                            error!("Failed to authenticate peer {}: {err}", conn.peer_addr);
+                            conn.kick(&format!("Authentication failed: {err}"));
                         }
                     }
                 }
@@ -198,13 +208,13 @@ pub(crate) fn handle_state(
 
 
             ConnStateLogin::HandleMojauth { mojauth } => {
+                // TODO: Check infractions
+                // TODO: Check already logged in network (max 5?)
                 if (unsafe { conn.send_packet_noset(LoginFinishedS2CLoginPacket {
                     uuid     : mojauth.uuid,
                     username : mojauth.name.clone(),
                     props    : default()
                 }) }.is_err()) { continue; }
-                // TODO: Check infractions
-                // TODO: Check already logged in network (max 5?)
                 *state = ConnStateLogin::FinishingLogin {
                     uuid     : mojauth.uuid,
                     username : mem::take(&mut mojauth.name),
@@ -215,9 +225,11 @@ pub(crate) fn handle_state(
 
             ConnStateLogin::FinishingLogin { uuid, username, props } => {
                 if let Some(C2SLoginPackets::LoginAcknowledged(_)) = conn.read_packet() {
+                    conn.real_stage = RealStage::Config;
 
                     if (conn.stage_sender.send(NextStage::Config).is_err()) {
-                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                        error!("Failed to switch peer {} to config stage", conn.peer_addr);
+                        conn.kick("Could not switch to config stage");
                         continue;
                     }
 
@@ -267,6 +279,7 @@ pub(crate) fn handle_state(
             ConnStateLogin::FinishingConfig { uuid, username, props } => {
                 if let Some(packet) = conn.read_packet() {
                     if let C2SConfigPackets::FinishConfiguration(_) = packet {
+                        conn.real_stage = RealStage::Play;
 
                         cmds.entity(entity)
                             .remove::<ConnStateLogin>()
@@ -283,7 +296,7 @@ pub(crate) fn handle_state(
 
                         if (conn.stage_sender.send(NextStage::Play).is_err()) {
                             error!("Failed to switch peer {} to play stage", conn.peer_addr);
-                            conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                            conn.kick("Could not switch to play stage");
                             continue;
                         }
 

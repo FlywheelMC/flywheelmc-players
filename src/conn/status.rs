@@ -38,7 +38,7 @@ pub(crate) fn handle_state(
 
                 C2SStatusPackets::StatusRequest(StatusRequestC2SStatusPacket) => {
                     if (state.sent_status) {
-                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                        conn.close();
                     } else {
                         trace!("Peer {} requested status", conn.peer_addr);
                         state.sent_status = true;
@@ -58,7 +58,7 @@ pub(crate) fn handle_state(
 
                 C2SStatusPackets::PingRequest(PingRequestC2SStatusPacket { timestamp }) => {
                     if (state.sent_pong) {
-                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                        conn.close();
                     } else {
                         trace!("Peer {} requested ping", conn.peer_addr);
                         state.sent_pong = true;
@@ -70,7 +70,7 @@ pub(crate) fn handle_state(
 
             }
             if (state.sent_status && state.sent_pong) {
-                conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                conn.close();
             }
         }
     }

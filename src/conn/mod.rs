@@ -1,8 +1,10 @@
+use crate::KICK_FOOTER;
 use crate::player::{
     Player,
     PlayerLeft
 };
 use flywheelmc_common::prelude::*;
+use protocol::value::{ Text, TextComponent, TextColour };
 use protocol::packet::{
     DecodeError,
     PacketReader, PacketWriter,
@@ -22,7 +24,12 @@ use protocol::packet::c2s::play::{
     C2SPlayPackets,
     KeepAliveC2SPlayPacket
 };
-use protocol::packet::s2c::play::KeepAliveS2CPlayPacket;
+use protocol::packet::s2c::login::LoginDisconnectS2CLoginPacket;
+use protocol::packet::s2c::config::DisconnectS2CConfigPacket;
+use protocol::packet::s2c::play::{
+    KeepAliveS2CPlayPacket,
+    DisconnectS2CPlayPacket
+};
 
 
 pub(crate) mod handshake;
@@ -38,17 +45,28 @@ const KEEPALIVE_TIMEOUT  : Duration = Duration::from_millis(5000);
 const MAX_KEEPALIVE_ID   : u64      = i64::MAX as u64;
 
 
+enum RealStage {
+    Handshake,
+    Status,
+    Login,
+    Config,
+    Play
+}
+
+
 #[derive(Component)]
 pub(crate) struct Connection {
-    pub(crate) peer_addr    : SocketAddr,
-    pub(crate) read_stream  : OwnedReadHalf,
-    pub(crate) write_sender : mpsc::UnboundedSender<(ShortName<'static>, packet::SetStage, Vec<u8>,)>,
-    pub(crate) stage_sender : mpsc::UnboundedSender<packet::NextStage>,
-    pub(crate) writer_task  : Task<()>,
-    pub(crate) data_queue   : VecDeque<u8>,
-    pub(crate) packet_proc  : PacketProcessing,
-    pub(crate) packet_index : u128,
-    pub(crate) shutdown     : Arc<AtomicBool>
+    peer_addr      : SocketAddr,
+    read_stream    : OwnedReadHalf,
+    write_sender   : mpsc::UnboundedSender<(ShortName<'static>, packet::SetStage, Vec<u8>,)>,
+    stage_sender   : mpsc::UnboundedSender<packet::NextStage>,
+    close_receiver : mpsc::Receiver<Cow<'static, str>>,
+    writer_task    : Task<()>,
+    data_queue     : VecDeque<u8>,
+    packet_proc    : PacketProcessing,
+    packet_index   : u128,
+    real_stage     : RealStage,
+    closing        : bool
 }
 
 #[derive(Component)]
@@ -62,6 +80,13 @@ pub(crate) enum ConnKeepalive {
     }
 }
 
+
+impl Connection {
+
+    #[inline]
+    pub fn peer_addr(&self) -> SocketAddr { self.peer_addr }
+
+}
 
 impl Connection {
 
@@ -89,11 +114,11 @@ impl Connection {
                     DecodeError::EndOfBuffer => { },
                     DecodeError::InvalidData(err) => {
                         error!("Failed to decode packet from peer {}: {}", self.peer_addr, err);
-                        self.shutdown.store(true, AtomicOrdering::Relaxed);
+                        self.kick(&format!("Bad packet: {}", err));
                     }
                     DecodeError::UnconsumedBuffer => {
                         error!("Failed to decode packet from peer {}: {}", self.peer_addr, DecodeError::UnconsumedBuffer);
-                        self.shutdown.store(true, AtomicOrdering::Relaxed);
+                        self.kick(&format!("Bad packet: {}", DecodeError::UnconsumedBuffer));
                     },
                     DecodeError::UnknownPacketPrefix(prefix) => {
                         warn!("Received packet with unknown prefix {:#04X} from peer {}", prefix, self.peer_addr);
@@ -107,12 +132,20 @@ impl Connection {
     pub fn send_packet_config<T>(&mut self, packet : T) -> Result<(), EncodeError>
     where
         T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StageConfig>
-    { unsafe { self.send_packet(packet::SetStage::Config, packet) } }
+    {
+        unsafe { self.send_packet(packet::SetStage::Config, packet)?; }
+        self.real_stage = RealStage::Config;
+        Ok(())
+    }
 
     pub fn send_packet_play<T>(&mut self, packet : T) -> Result<(), EncodeError>
     where
         T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StagePlay>
-    { unsafe { self.send_packet(packet::SetStage::Play, packet) } }
+    {
+        unsafe { self.send_packet(packet::SetStage::Play, packet)?; }
+        self.real_stage = RealStage::Play;
+        Ok(())
+    }
 
     pub unsafe fn send_packet_noset<T>(&mut self, packet : T) -> Result<(), EncodeError>
     where
@@ -126,23 +159,58 @@ impl Connection {
         let mut plaindata = PacketWriter::new();
         if let Err(err) = packet.encode_prefixed(&mut plaindata) {
             error!("Failed to encode packet for peer {}: {}", self.peer_addr, err);
-            self.shutdown.store(true, AtomicOrdering::Relaxed);
+            self.kick("Failed to encode packet");
             return Err(err);
         }
         let cipherdata = match (self.packet_proc.encode_encrypt(plaindata)) {
             Ok(cipherdata) => cipherdata,
             Err(err) => {
                 error!("Failed to encrypt and compress packet for peer {}: {}", self.peer_addr, err);
-                self.shutdown.store(true, AtomicOrdering::Relaxed);
+                self.kick("Failed to encrypt and compress packet");
                 return Err(err);
             }
         };
         if let Err(err) = self.write_sender.send((ShortName::of::<T>(), set_stage, cipherdata.into_inner(),)) {
             error!("Failed to send packet to peer {}: {}", self.peer_addr, err);
-            self.shutdown.store(true, AtomicOrdering::Relaxed);
+            self.kick("Failed to send packet");
             return Err(EncodeError::SendFailed);
         }
         Ok(())
+    }
+
+    pub fn kick(&mut self, reason : &str) {
+        self.close();
+        info!("Kicking peer {}: {reason}", self.peer_addr);
+        let reason = || Text::from(vec![
+            {
+                let     c = TextComponent::of_literal("");
+                let mut c = c.colour(TextColour::RGB(178, 255, 228));
+                c.extra.push(TextComponent::of_literal(reason));
+                c
+            },
+            TextComponent::of_literal("\n\n\n"),
+            {
+                let     c = TextComponent::of_literal("");
+                let mut c = c.underline(true);
+                c.extra.extend(KICK_FOOTER.read().unwrap().components().iter().cloned());
+                c
+            },
+            TextComponent::of_literal("\n"),
+            TextComponent::of_literal(Utc::now().format("%Y-%m-%d %H:%M:%S%.9f %Z%z").to_string())
+                .colour(TextColour::DarkGrey)
+        ]);
+        match (self.real_stage) {
+            RealStage::Handshake => { },
+            RealStage::Status => { },
+            RealStage::Login  => { unsafe { let _ = self.send_packet_noset(LoginDisconnectS2CLoginPacket { reason : reason().to_json() }); } },
+            RealStage::Config => { let _ = self.send_packet_config(DisconnectS2CConfigPacket { reason : reason().to_nbt() }); },
+            RealStage::Play   => { let _ = self.send_packet_play(DisconnectS2CPlayPacket { reason : reason().to_nbt() }); }
+        }
+    }
+
+    #[inline]
+    pub fn close(&mut self) {
+        self.closing = true;
     }
 
 }
@@ -160,26 +228,28 @@ pub(crate) async fn run_listener(
         let (read_stream, write_stream,) = stream.into_split();
         let (write_sender, write_receiver,) = mpsc::unbounded_channel();
         let (stage_sender, stage_receiver,) = mpsc::unbounded_channel();
-        let shutdown = Arc::new(AtomicBool::new(false));
+        let (close_sender, close_receiver,) = mpsc::channel(1);
         AsyncWorld.spawn_bundle((
             Connection {
                 peer_addr,
                 read_stream,
                 write_sender,
                 stage_sender,
+                close_receiver,
                 writer_task  : AsyncWorld.spawn_task(packet::PacketWriterTask {
                     peer_addr,
                     current_stage  : packet::CurrentStage::Startup,
                     write_receiver,
                     stage_receiver,
+                    close_sender,
                     stream         : write_stream,
-                    shutdown       : Arc::clone(&shutdown),
                     send_timeout   : Duration::from_millis(250)
                 }.run()),
                 data_queue   : VecDeque::new(),
                 packet_proc  : PacketProcessing::NONE,
                 packet_index : 0,
-                shutdown
+                real_stage   : RealStage::Handshake,
+                closing      : false
             },
             handshake::ConnStateHandshake,
         ));
@@ -194,7 +264,7 @@ pub(crate) fn read_conn_streams(
         match (conn.read_stream.try_read(&mut buf)) {
             Ok(0) => {
                 // Disconnected.
-                conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                conn.close();
             },
             Ok(count) => {
                 conn.data_queue.reserve(count);
@@ -203,14 +273,14 @@ pub(crate) fn read_conn_streams(
                         conn.data_queue.push_back(b);
                     } else {
                         error!("Failed to decrypt packet from peer {}", conn.peer_addr);
-                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                        conn.kick(&format!("Bad packet: could not decrypt"));
                     }
                 }
             },
             Err(err) if (err.kind() == io::ErrorKind::WouldBlock) => { },
             Err(err) => {
                 error!("Failed to read packet from peer {}", err);
-                conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                conn.kick(&format!("Bad packet: {}", err));
             }
         }
     }
@@ -232,7 +302,7 @@ pub(crate) fn timeout_conns(
             } },
             ConnKeepalive::Waiting { expected_by, .. } => { if (Instant::now() >= expected_by) {
                 warn!("Peer {} timed out", conn.peer_addr);
-                conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                conn.kick("Timed out");
             } }
         }
     }
@@ -242,12 +312,12 @@ pub(crate) fn timeout_conns(
         }
         if let packet::Packet::Play(C2SPlayPackets::KeepAlive(KeepAliveC2SPlayPacket(id)))
             | packet::Packet::Config(C2SConfigPackets::KeepAlive(KeepAliveC2SConfigPacket(id))) = packet
-            && let Ok((conn, mut keepalive,)) = q_conns.get_mut(*entity)
+            && let Ok((mut conn, mut keepalive,)) = q_conns.get_mut(*entity)
         {
             match (*keepalive) {
                 ConnKeepalive::Sending { .. } => {
                     error!("Received unordered keepalive from peer {}", conn.peer_addr);
-                    conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                    conn.kick("Unordered keepalive");
                 },
                 ConnKeepalive::Waiting { expected_id, .. } => {
                     if (*id == expected_id) {
@@ -255,7 +325,7 @@ pub(crate) fn timeout_conns(
                         *keepalive = ConnKeepalive::Sending { sending_at : Instant::now() + KEEPALIVE_INTERVAL };
                     } else {
                         error!("Received unordered keepalive from peer {}", conn.peer_addr);
-                        conn.shutdown.store(true, AtomicOrdering::Relaxed);
+                        conn.kick("Unordered keepalive");
                     }
                 }
             }
@@ -263,13 +333,13 @@ pub(crate) fn timeout_conns(
     }
 }
 
-pub(crate) fn shutdown_conns(
+pub(crate) fn close_conns(
     mut cmds    : Commands,
-    mut q_conns : Query<(Entity, &Connection, Option<&mut Player>,)>,
+    mut q_conns : Query<(Entity, &mut Connection, Option<&mut Player>,)>,
     mut ew_left : EventWriter<PlayerLeft>
 ) {
-    for (entity, conn, player,) in &mut q_conns {
-        if (conn.shutdown.load(AtomicOrdering::Relaxed)) {
+    for (entity, mut conn, player,) in &mut q_conns {
+        if (conn.closing) {
             if let Some(mut player) = player {
                 ew_left.write(PlayerLeft {
                     uuid     : player.uuid,
@@ -280,6 +350,11 @@ pub(crate) fn shutdown_conns(
             }
             debug!("Peer {} disconnected.", conn.peer_addr);
             cmds.entity(entity).despawn();
+        }
+        match (conn.close_receiver.try_recv()) {
+            Ok(reason) => { conn.kick(&reason); },
+            Err(mpsc::TryRecvError::Empty) => { },
+            Err(mpsc::TryRecvError::Disconnected) => { conn.close(); }
         }
     }
 }
