@@ -3,6 +3,9 @@ use protocol::value::Text;
 use protocol::mojang::auth_verify::MojAuthProperty;
 
 
+pub mod comms;
+
+
 #[derive(Component)]
 pub struct Player {
     pub(crate) uuid     : Uuid,
@@ -21,7 +24,7 @@ impl Player {
 #[derive(Event)]
 #[non_exhaustive]
 pub struct PlayerJoined {
-    pub entity   : Entity
+    pub entity : Entity
 }
 
 #[derive(Event)]

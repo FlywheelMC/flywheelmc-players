@@ -47,6 +47,7 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_event::<player::PlayerJoined>()
             .add_event::<player::PlayerLeft>()
             .add_event::<player::KickPlayer>()
+            .add_event::<player::comms::PlayerCommsActionEvent>()
             .insert_resource(RejectNewConns(Cow::Borrowed("Server still starting...")))
             .insert_resource(ListenAddrs(self.listen_addrs.clone()))
             .insert_resource(ServerMotd(self.motd.clone()))
@@ -69,6 +70,7 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_systems(Update, conn::status::handle_state)
             .add_systems(Update, conn::login::handle_state)
             .add_systems(Update, conn::play::handle_state)
+            .add_systems(Update, player::comms::handle_actions)
             .add_systems(Update, world::read_settings_updates)
             .add_systems(Update, world::update_chunk_view);
         if let Some(max_conns) = self.max_conns {

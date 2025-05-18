@@ -54,7 +54,7 @@ pub(crate) struct PacketWriterTask {
     pub(crate) current_stage  : CurrentStage,
     pub(crate) write_receiver : mpsc::UnboundedReceiver<(ShortName<'static>, SetStage, Vec<u8>,)>,
     pub(crate) stage_receiver : mpsc::UnboundedReceiver<NextStage>,
-    pub(crate) close_sender   : mpsc::Sender<Cow<'static, str>>,
+    pub(crate) close_sender   : oneshot::Sender<Cow<'static, str>>,
     pub(crate) stream         : OwnedWriteHalf,
     pub(crate) send_timeout   : Duration
 }
@@ -93,12 +93,12 @@ impl PacketWriterTask {
                         Ok(Ok(_)) => { },
                         Ok(Err(err)) => {
                             error!("Failed to send packet to peer {}: {}", self.peer_addr, err);
-                            let _ = self.close_sender.send(Cow::Owned(err.to_string())).await;
+                            let _ = self.close_sender.send(Cow::Owned(err.to_string()));
                             return Err(());
                         }
                         Err(_) => {
                             error!("Failed to send packet to peer {}: {}", self.peer_addr, io::ErrorKind::TimedOut);
-                            let _ = self.close_sender.send(Cow::Borrowed("timed out")).await;
+                            let _ = self.close_sender.send(Cow::Borrowed("timed out"));
                             return Err(());
                         }
                     }

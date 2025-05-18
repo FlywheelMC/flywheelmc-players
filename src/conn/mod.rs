@@ -63,7 +63,7 @@ pub(crate) struct Connection {
     read_stream    : OwnedReadHalf,
     write_sender   : mpsc::UnboundedSender<(ShortName<'static>, packet::SetStage, Vec<u8>,)>,
     stage_sender   : mpsc::UnboundedSender<packet::NextStage>,
-    close_receiver : mpsc::Receiver<Cow<'static, str>>,
+    close_receiver : oneshot::Receiver<Cow<'static, str>>,
     writer_task    : Task<()>,
     data_queue     : VecDeque<u8>,
     packet_proc    : PacketProcessing,
@@ -232,7 +232,7 @@ pub(crate) async fn run_listener(
         let (read_stream, write_stream,) = stream.into_split();
         let (write_sender, write_receiver,) = mpsc::unbounded_channel();
         let (stage_sender, stage_receiver,) = mpsc::unbounded_channel();
-        let (close_sender, close_receiver,) = mpsc::channel(1);
+        let (close_sender, close_receiver,) = oneshot::channel();
         AsyncWorld.spawn_bundle((
             Connection {
                 peer_addr,
@@ -357,8 +357,8 @@ pub(crate) fn close_conns(
         }
         match (conn.close_receiver.try_recv()) {
             Ok(reason) => { conn.kick(&reason); },
-            Err(mpsc::TryRecvError::Empty) => { },
-            Err(mpsc::TryRecvError::Disconnected) => { conn.close(); }
+            Err(oneshot::TryRecvError::Empty) => { },
+            Err(oneshot::TryRecvError::Closed) => { conn.close(); }
         }
     }
 }
