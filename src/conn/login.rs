@@ -257,7 +257,7 @@ pub(crate) fn handle_state(
                     }
 
                     // Complete config
-                    info!("Player {} ({}) joined.", username, uuid);
+                    info!("Player {} ({}) joined", username, uuid);
                     cmds.entity(entity).insert((
                         Player {
                             uuid     : *uuid,

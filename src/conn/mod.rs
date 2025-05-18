@@ -224,11 +224,11 @@ pub(crate) async fn run_listener(
 ) -> io::Result<()> {
     info!("Starting game server...");
     let listener = TcpListener::bind(&**listen_addrs).await?;
-    pass!("Started game server on {}.", listen_addrs);
+    pass!("Started game server on {}", listen_addrs);
     loop {
         let (stream, peer_addr,) = listener.accept().await?;
         ACTIVE_CONNS.fetch_add(1, AtomicOrdering::Relaxed);
-        debug!("Incoming connection from {}.", peer_addr);
+        debug!("Incoming connection from {}", peer_addr);
         let (read_stream, write_stream,) = stream.into_split();
         let (write_sender, write_receiver,) = mpsc::unbounded_channel();
         let (stage_sender, stage_receiver,) = mpsc::unbounded_channel();
