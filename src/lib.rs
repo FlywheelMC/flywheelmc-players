@@ -4,6 +4,7 @@
     let_chains,
     negative_impls,
     // Standard Library
+    int_roundings,
     map_try_insert
 )]
 

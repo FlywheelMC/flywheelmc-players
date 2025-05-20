@@ -17,12 +17,20 @@ use protocol::packet::s2c::play::{
     LevelChunkWithLightS2CPlayPacket
 };
 use protocol::value::{ Identifier, BlockState, DimType, Nbt };
-use protocol::value::ChunkSectionData as PtcChunkSectionData;
 use protocol::registry::RegEntry;
 
 
+mod chunk;
+pub use chunk::*;
+
 mod chunk_section;
 pub use chunk_section::*;
+
+mod setbatch;
+use setbatch::*;
+
+mod action;
+pub use action::*;
 
 
 const BLOCK_AIR : RegEntry<BlockState> = unsafe { RegEntry::new_unchecked(0) };
@@ -47,23 +55,6 @@ pub struct World {
 
 #[derive(Component)]
 pub struct PlayerInWorld;
-
-pub struct Chunk {
-    sections : Vec<ChunkSection>
-}
-
-
-impl Chunk {
-
-    pub(crate) fn ptc_chunk_section_data(&self) -> PtcChunkSectionData {
-        let mut sections = Vec::with_capacity(self.sections.len());
-        for section in &self.sections {
-            sections.push(section.ptc_chunk_section());
-        }
-        PtcChunkSectionData { sections }
-    }
-
-}
 
 
 pub(crate) fn read_settings_updates(
@@ -138,6 +129,7 @@ pub(crate) fn load_chunks(
         for (cpos, chunk,) in &mut world.chunks {
             for (y, section) in chunk.sections.iter_mut().enumerate() {
                 if let Some(packet) = section.ptc_update_section([cpos.x, y as i32, cpos.y,]) {
+                    warn!("{} {} {}", cpos.x, y, cpos.y);
                     section.clear_dirty();
                     let _ = conn.send_packet_play(packet);
                 }
@@ -196,73 +188,16 @@ fn try_load_chunk(
 // TODO: Unload chunks
 
 
-#[derive(Event)]
-#[non_exhaustive]
-pub struct WorldChunkLoading {
-    pub entity : Entity,
-    pub pos    : Vec2<i32>
+fn in_section_block_linearise(dx : u8, dy : u8, dz : u8) -> u16 {
+    (((dy & 0b00001111) as u16) << 8)
+    | (((dz & 0b00001111) as u16) << 4)
+    | ((dx & 0b00001111) as u16)
 }
 
-
-#[derive(Event)]
-pub struct WorldChunkActionEvent {
-    pub entity : Entity,
-    pub action : WorldChunkAction
-}
-
-pub enum WorldChunkAction {
-
-    Set {
-        #[expect(clippy::type_complexity)]
-        blocks : Vec<(Vec3<i64>, String, Vec<(String, String,)>)>
-    }
-
-}
-
-
-pub(crate) fn handle_actions(
-    mut q_worlds  : Query<(&mut World,)>,
-    mut er_action : EventReader<WorldChunkActionEvent>
-) {
-    for WorldChunkActionEvent { entity, action } in er_action.read() {
-        if let Ok((mut world,)) = q_worlds.get_mut(*entity) {
-            match (action) {
-
-                WorldChunkAction::Set { blocks } => {
-                    let mut sections = BTreeMap::new();
-                    for (block_pos, block_id, states,) in blocks {
-                        let chunk_pos = Vec2::new((block_pos.x / 16) as i32, (block_pos.z / 16) as i32);
-                        if (world.chunks.contains_key(&chunk_pos)) {
-                            let block_id = Identifier::from(block_id);
-                            if let Some(mut block_state) = BlockState::default_for(&block_id) {
-                                for (state, value,) in states {
-                                    if (block_state.properties.contains_key(state)) {
-                                        block_state.properties.insert(state.clone(), value.clone());
-                                    }
-                                }
-                                if let Some(block_id) = block_state.to_id() {
-                                    let section_pos    = Vec3::new(chunk_pos.x, (block_pos.y / 16) as i32, chunk_pos.y);
-                                    let in_section_pos = Vec3::new(block_pos.x.rem_euclid(16) as u8, block_pos.y.rem_euclid(16) as u8, block_pos.z.rem_euclid(16) as u8);
-                                    let section        = sections.entry(section_pos).or_insert(BTreeMap::new());
-                                    section.insert(in_section_pos, unsafe { RegEntry::new_unchecked(block_id as u32) });
-                                }
-                            }
-                        }
-                    }
-                    for (section_pos, blocks,) in sections {
-                        let chunk_pos = Vec2::new(section_pos.x, section_pos.z);
-                        if let Some(chunk) = world.chunks.get_mut(&chunk_pos)
-                            && let Some(section) = chunk.sections.get_mut(section_pos.y as usize)
-                        {
-                            let mut section_writer = section.writer();
-                            for (in_section_pos, block,) in blocks {
-                                section_writer.set_xyz(in_section_pos.x, in_section_pos.y, in_section_pos.z, block);
-                            }
-                        }
-                    }
-                }
-
-            }
-        }
-    }
+fn in_section_block_delinearise(l : u16) -> [u8; 3] {
+    [
+        (l as u8) & 0b00001111,
+        ((l >> 8) as u8) & 0b00001111,
+        ((l >> 4) as u8) & 0b00001111
+    ]
 }
