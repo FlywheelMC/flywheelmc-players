@@ -62,11 +62,12 @@ pub(crate) struct PacketWriterTask {
 impl PacketWriterTask {
 
     #[inline(always)]
-    pub(crate) async fn run(self) -> () {
-        let _ = self.run_inner().await;
+    pub(crate) async fn run(mut self) -> () {
+        let close = self.run_inner().await;
+        let _ = self.close_sender.force_send(close);
     }
 
-    async fn run_inner(mut self) -> Result<(), ()> {
+    async fn run_inner(&mut self) -> Cow<'static, str> {
         loop {
             match (self.write_receiver.try_recv()) {
                 Ok((packet_type, set_stage, packet,)) => {
@@ -96,18 +97,16 @@ impl PacketWriterTask {
                         Some(Ok(_)) => { },
                         Some(Err(err)) => {
                             error!("Failed to send packet to peer {}: {}", self.peer_addr, err);
-                            let _ = self.close_sender.send(Cow::Owned(err.to_string()));
-                            return Err(());
+                            return Cow::Owned(err.to_string());
                         }
                         None => {
                             error!("Failed to send packet to peer {}: {}", self.peer_addr, io::ErrorKind::TimedOut);
-                            let _ = self.close_sender.send(Cow::Borrowed("timed out"));
-                            return Err(());
+                            return Cow::Borrowed("timed out");
                         }
                     }
                 },
                 Err(channel::TryRecvError::Empty) => { },
-                Err(channel::TryRecvError::Closed) => { return Err(()); }
+                Err(channel::TryRecvError::Closed) => { return Cow::Borrowed("channel closed"); }
             }
             match (self.stage_receiver.try_recv()) {
                 Ok(stage) => { self.current_stage =  match (stage) {
@@ -115,7 +114,7 @@ impl PacketWriterTask {
                     NextStage::Play   => CurrentStage::Play,
                 }; },
                 Err(channel::TryRecvError::Empty) => { },
-                Err(channel::TryRecvError::Closed) => { return Err(()); }
+                Err(channel::TryRecvError::Closed) => { return Cow::Borrowed("channel closed"); }
             }
             task::yield_now().await;
         }

@@ -38,6 +38,7 @@ pub struct ViewDistance(pub(crate) Ordered<NonZeroU8>);
 
 #[derive(Component)]
 pub struct World {
+    #[expect(dead_code)]
     pub(crate) dim_id       : Identifier,
     pub(crate) dim_type     : DimType,
     pub(crate) chunks       : BTreeMap<Vec2<i32>, Chunk>,
@@ -99,6 +100,7 @@ pub(crate) fn update_chunk_view(
     }
 }
 
+#[expect(clippy::type_complexity)]
 pub(crate) fn load_chunks(
     mut q_conns : Query<(Entity, &mut Connection, &mut World, &ChunkCentre, &ViewDistance), (With<ConnStatePlay>, With<PlayerInWorld>,)>,
     mut ew_load : EventWriter<WorldChunkLoading>
@@ -130,7 +132,6 @@ pub(crate) fn load_chunks(
 
     // Queue new chunks for load.
     for (entity, conn, mut world, chunk_centre, view_dist) in &mut q_conns {
-        let v = view_dist.0.get() as i32;
         try_load_chunk(entity, &conn, &mut ew_load, &mut world, *chunk_centre.0);
         for radius in 1..=(view_dist.0.get() as i32) {
             let edge_len = 2 * radius;
@@ -161,8 +162,8 @@ fn try_load_chunk(
     if (! world.chunks.contains_key(&pos)) {
         world.chunks.insert(pos, Chunk {
             sections : {
-                let mut section  = ChunkSection::empty();
-                let mut count    = (world.dim_type.height / 16).max(1);
+                let     section  = ChunkSection::empty();
+                let     count    = (world.dim_type.height / 16).max(1);
                 let mut sections = Vec::with_capacity(count as usize);
                 for _ in 0..(count.saturating_sub(1)) {
                     sections.push(section.clone());
@@ -198,6 +199,7 @@ pub struct WorldChunkActionEvent {
 pub enum WorldChunkAction {
 
     Set {
+        #[expect(clippy::type_complexity)]
         blocks : Vec<(Vec3<i64>, String, Vec<(String, String,)>)>
     }
 
@@ -235,12 +237,12 @@ pub(crate) fn handle_actions(
                     }
                     for (section_pos, blocks) in sections {
                         let chunk_pos = Vec2::new(section_pos.x, section_pos.z);
-                        if let Some(chunk) = world.chunks.get_mut(&chunk_pos) {
-                            if let Some(section) = chunk.sections.get_mut(section_pos.y as usize) {
-                                let mut section_writer = section.writer();
-                                for (in_section_pos, block,) in blocks {
-                                    section_writer.set_xyz(in_section_pos.x, in_section_pos.y, in_section_pos.z, block);
-                                }
+                        if let Some(chunk) = world.chunks.get_mut(&chunk_pos)
+                            && let Some(section) = chunk.sections.get_mut(section_pos.y as usize)
+                        {
+                            let mut section_writer = section.writer();
+                            for (in_section_pos, block,) in blocks {
+                                section_writer.set_xyz(in_section_pos.x, in_section_pos.y, in_section_pos.z, block);
                             }
                         }
                     }

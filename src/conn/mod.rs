@@ -64,6 +64,7 @@ pub(crate) struct Connection {
     write_sender   : channel::Sender<(ShortName<'static>, packet::SetStage, Vec<u8>,)>,
     stage_sender   : channel::Sender<packet::NextStage>,
     close_receiver : channel::Receiver<Cow<'static, str>>,
+    #[expect(dead_code)]
     writer_task    : Task<()>,
     data_queue     : VecDeque<u8>,
     packet_proc    : PacketProcessing,
@@ -132,6 +133,7 @@ impl Connection {
         }
     }
 
+    #[expect(dead_code)]
     pub fn send_packet_config<T>(&mut self, packet : T) -> Result<(), EncodeError>
     where
         T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C, StageT = StageConfig>

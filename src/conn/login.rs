@@ -90,7 +90,7 @@ pub(crate) enum ConnStateLogin {
 }
 
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn handle_state(
     mut cmds           : Commands,
     mut q_conns        : Query<(Entity, &mut Connection, &mut ConnStateLogin,)>,

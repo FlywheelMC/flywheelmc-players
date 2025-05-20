@@ -10,6 +10,7 @@ pub mod comms;
 pub struct Player {
     pub(crate) uuid     : Uuid,
     pub(crate) username : String,
+    #[expect(dead_code)]
     pub(crate) props    : Vec<MojAuthProperty>
 }
 impl Player {

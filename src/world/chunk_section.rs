@@ -178,13 +178,13 @@ fn in_section_block_linearise(dx : u8, dy : u8, dz : u8) -> u16 {
     | ((dx & 0b00001111) as u16)
 }
 
-fn in_section_block_delinearise(l : u16) -> [u8; 3] {
+/*fn in_section_block_delinearise(l : u16) -> [u8; 3] {
     [
         (l as u8) & 0b00001111,
         ((l >> 8) as u8) & 0b00001111,
         ((l >> 4) as u8) & 0b00001111
     ]
-}
+}*/
 
 fn section_write_data_run(data : &mut Vec<u8>, len : u16, block : RegEntry<BlockState>) {
     if (len > 0) {
