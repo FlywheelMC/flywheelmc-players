@@ -1,7 +1,17 @@
 use crate::world::BLOCK_AIR;
 use flywheelmc_common::prelude::*;
-use protocol::value::{ Var32, BlockState };
-use protocol::value::{ ChunkSection as PtcChunkSection, PalettedContainer, PaletteFormat };
+use protocol::value::{ Var32, Var64, BlockState, BlockPos };
+use protocol::value::{
+    ChunkSection as PtcChunkSection,
+    PalettedContainer,
+    PaletteFormat,
+    ChunkSectionPosition
+};
+use protocol::packet::s2c::play::{
+    S2CPlayPackets,
+    SectionBlocksUpdateS2CPlayPacket,
+    BlockUpdateS2CPlayPacket
+};
 use protocol::registry::RegEntry;
 
 
@@ -59,7 +69,7 @@ impl ChunkSection {
         self.dirty.clear();
     }
 
-    pub(crate) fn ptc_chunk_section(&self) -> PtcChunkSection {
+    pub(super) fn ptc_chunk_section(&self) -> PtcChunkSection {
         let mut block_count = 0;
         let run_len = u16::from_ne_bytes([self.data[0], self.data[1]]);
         let block_states = if (run_len == 4096) {
@@ -90,6 +100,38 @@ impl ChunkSection {
                 bits_per_entry : 0,
                 format         : PaletteFormat::SingleValued { entry : unsafe { RegEntry::new_unchecked(0) } }
             }
+        }
+    }
+
+    pub(super) fn ptc_update_section(&self, [cx, cy, cz] : [i32; 3]) -> Option<S2CPlayPackets> {
+        let dirty_len = self.dirty.len();
+        if (dirty_len == 0) { None }
+        else if (dirty_len == 1) {
+            let linear_xyz = *self.dirty.first().unwrap();
+            let [dx, dy, dz] = in_section_block_delinearise(linear_xyz);
+            Some(S2CPlayPackets::BlockUpdate(BlockUpdateS2CPlayPacket {
+                pos   : BlockPos {
+                    x : (cx * 16) + (dx as i32),
+                    y : (cy * 16) + (dy as i32),
+                    z : (cz * 16) + (dz as i32)
+                },
+                block : self.get(linear_xyz),
+            }))
+        } else {
+            Some(S2CPlayPackets::SectionBlocksUpdate(SectionBlocksUpdateS2CPlayPacket {
+                chunk_section : ChunkSectionPosition { x : cx, y : cy, z : cz },
+                blocks        : {
+                    let mut blocks = Vec::with_capacity(dirty_len);
+                    for &linear_xyz in &self.dirty {
+                        let [dx, dy, dz] = in_section_block_delinearise(linear_xyz);
+                        blocks.push(Var64::from((
+                            (self.get(linear_xyz).id() as u64) << 12
+                                | ((dx as u64) << 8) | ((dz as u64) << 4) | (dy as u64)
+                        ) as i64));
+                    }
+                    blocks.into()
+                },
+            }))
         }
     }
 
@@ -178,13 +220,13 @@ fn in_section_block_linearise(dx : u8, dy : u8, dz : u8) -> u16 {
     | ((dx & 0b00001111) as u16)
 }
 
-/*fn in_section_block_delinearise(l : u16) -> [u8; 3] {
+fn in_section_block_delinearise(l : u16) -> [u8; 3] {
     [
         (l as u8) & 0b00001111,
         ((l >> 8) as u8) & 0b00001111,
         ((l >> 4) as u8) & 0b00001111
     ]
-}*/
+}
 
 fn section_write_data_run(data : &mut Vec<u8>, len : u16, block : RegEntry<BlockState>) {
     if (len > 0) {

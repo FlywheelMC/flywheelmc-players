@@ -130,8 +130,21 @@ pub(crate) fn load_chunks(
         }
     }
 
-    // Queue new chunks for load.
-    for (entity, conn, mut world, chunk_centre, view_dist) in &mut q_conns {
+    for (entity, mut conn, mut world, chunk_centre, view_dist) in &mut q_conns {
+
+        // TODO: Unload out-of-range chunks.
+
+        // Update loaded chunks.
+        for (cpos, chunk,) in &mut world.chunks {
+            for (y, section) in chunk.sections.iter_mut().enumerate() {
+                if let Some(packet) = section.ptc_update_section([cpos.x, y as i32, cpos.y,]) {
+                    section.clear_dirty();
+                    let _ = conn.send_packet_play(packet);
+                }
+            }
+        }
+
+        // Queue new chunks for load.
         try_load_chunk(entity, &conn, &mut ew_load, &mut world, *chunk_centre.0);
         for radius in 1..=(view_dist.0.get() as i32) {
             let edge_len = 2 * radius;
@@ -150,6 +163,7 @@ pub(crate) fn load_chunks(
                 }
             }
         }
+
     }
 }
 fn try_load_chunk(
@@ -217,9 +231,9 @@ pub(crate) fn handle_actions(
                 WorldChunkAction::Set { blocks } => {
                     let mut sections = BTreeMap::new();
                     for (block_pos, block_id, states,) in blocks {
-                        let chunk_pos   = Vec2::new((block_pos.x / 16) as i32, (block_pos.z / 16) as i32);
+                        let chunk_pos = Vec2::new((block_pos.x / 16) as i32, (block_pos.z / 16) as i32);
                         if (world.chunks.contains_key(&chunk_pos)) {
-                            let block_id    = Identifier::from(block_id);
+                            let block_id = Identifier::from(block_id);
                             if let Some(mut block_state) = BlockState::default_for(&block_id) {
                                 for (state, value,) in states {
                                     if (block_state.properties.contains_key(state)) {
@@ -235,7 +249,7 @@ pub(crate) fn handle_actions(
                             }
                         }
                     }
-                    for (section_pos, blocks) in sections {
+                    for (section_pos, blocks,) in sections {
                         let chunk_pos = Vec2::new(section_pos.x, section_pos.z);
                         if let Some(chunk) = world.chunks.get_mut(&chunk_pos)
                             && let Some(section) = chunk.sections.get_mut(section_pos.y as usize)
