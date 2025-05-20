@@ -2,13 +2,16 @@
     // Language
     auto_traits,
     let_chains,
-    negative_impls
+    negative_impls,
+    // Standard Library
+    map_try_insert
 )]
 
 
 use flywheelmc_common::prelude::*;
 use protocol::packet::s2c::config::RegistryDataS2CConfigPacket;
-use protocol::value::{ DimType, Identifier, Text, TextComponent, EntityType };
+use protocol::value::{ Identifier, Text, TextComponent };
+use protocol::value::{ DimType, EntityType };
 use protocol::registry::Registry;
 pub use protocol::{ MINECRAFT_VERSION, PROTOCOL_VERSION };
 
@@ -18,7 +21,7 @@ pub use conn::packet::{ PacketReadEvent, Packet };
 
 pub mod player;
 
-mod world;
+pub mod world;
 
 
 static KICK_FOOTER : SRwLock<Text> = SRwLock::new(Text::new());
@@ -48,6 +51,8 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_event::<player::PlayerLeft>()
             .add_event::<player::KickPlayer>()
             .add_event::<player::comms::PlayerCommsActionEvent>()
+            .add_event::<world::WorldChunkLoading>()
+            .add_event::<world::WorldChunkActionEvent>()
             .insert_resource(RejectNewConns(Cow::Borrowed("Server still starting...")))
             .insert_resource(ListenAddrs(self.listen_addrs.clone()))
             .insert_resource(ServerMotd(self.motd.clone()))
@@ -59,7 +64,6 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .insert_resource(ServerBrand(self.server_brand.clone()))
             .insert_resource(DefaultDim(self.default_dim_id.clone(), self.default_dim_type.clone()))
             .insert_resource(MaxViewDistance(self.max_view_distance))
-            .insert_resource(LobbyYSections(self.default_dim_type.height / 16))
             .insert_resource(Registries::default())
             .insert_resource(RegistryPackets::new(&self.default_dim_id, &self.default_dim_type))
             .add_systems(Startup, start_listener)
@@ -72,7 +76,9 @@ impl Plugin for FlywheelMcPlayersPlugin {
             .add_systems(Update, conn::play::handle_state)
             .add_systems(Update, player::comms::handle_actions)
             .add_systems(Update, world::read_settings_updates)
-            .add_systems(Update, world::update_chunk_view);
+            .add_systems(Update, world::update_chunk_view)
+            .add_systems(Update, world::load_chunks)
+            .add_systems(Update, world::handle_actions);
         if let Some(max_conns) = self.max_conns {
             app.insert_resource(MaxConnCount(max_conns));
         }
@@ -116,9 +122,6 @@ struct DefaultDim(Identifier, DimType);
 
 #[derive(Resource)]
 struct MaxViewDistance(NonZeroU8);
-
-#[derive(Resource)] // TODO: Remove this
-struct LobbyYSections(u32);
 
 #[derive(Resource)]
 struct Registries {

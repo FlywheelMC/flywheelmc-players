@@ -60,10 +60,10 @@ enum RealStage {
 #[derive(Component)]
 pub(crate) struct Connection {
     peer_addr      : SocketAddr,
-    read_stream    : OwnedReadHalf,
-    write_sender   : mpsc::UnboundedSender<(ShortName<'static>, packet::SetStage, Vec<u8>,)>,
-    stage_sender   : mpsc::UnboundedSender<packet::NextStage>,
-    close_receiver : oneshot::Receiver<Cow<'static, str>>,
+    read_stream    : TcpStream,
+    write_sender   : channel::Sender<(ShortName<'static>, packet::SetStage, Vec<u8>,)>,
+    stage_sender   : channel::Sender<packet::NextStage>,
+    close_receiver : channel::Receiver<Cow<'static, str>>,
     writer_task    : Task<()>,
     data_queue     : VecDeque<u8>,
     packet_proc    : PacketProcessing,
@@ -173,9 +173,35 @@ impl Connection {
                 return Err(err);
             }
         };
-        if let Err(err) = self.write_sender.send((ShortName::of::<T>(), set_stage, cipherdata.into_inner(),)) {
+        if let Err(err) = self.write_sender.force_send((ShortName::of::<T>(), set_stage, cipherdata.into_inner(),)) {
             error!("Failed to send packet to peer {}: {}", self.peer_addr, err);
             self.kick("Failed to send packet");
+            return Err(EncodeError::SendFailed);
+        }
+        Ok(())
+    }
+
+    pub unsafe fn send_packet_nokick<T>(&mut self, set_stage : packet::SetStage, packet : T) -> Result<(), EncodeError>
+    where
+        T : PrefixedPacketEncode + PacketMeta<BoundT = BoundS2C>
+    {
+        let mut plaindata = PacketWriter::new();
+        if let Err(err) = packet.encode_prefixed(&mut plaindata) {
+            error!("Failed to encode packet for peer {}: {}", self.peer_addr, err);
+            self.close();
+            return Err(err);
+        }
+        let cipherdata = match (self.packet_proc.encode_encrypt(plaindata)) {
+            Ok(cipherdata) => cipherdata,
+            Err(err) => {
+                error!("Failed to encrypt and compress packet for peer {}: {}", self.peer_addr, err);
+                self.close();
+                return Err(err);
+            }
+        };
+        if let Err(err) = self.write_sender.force_send((ShortName::of::<T>(), set_stage, cipherdata.into_inner(),)) {
+            error!("Failed to send packet to peer {}: {}", self.peer_addr, err);
+            self.close();
             return Err(EncodeError::SendFailed);
         }
         Ok(())
@@ -205,9 +231,9 @@ impl Connection {
         match (self.real_stage) {
             RealStage::Handshake => { },
             RealStage::Status => { },
-            RealStage::Login  => { unsafe { let _ = self.send_packet_noset(LoginDisconnectS2CLoginPacket { reason : reason().to_json() }); } },
-            RealStage::Config => { let _ = self.send_packet_config(DisconnectS2CConfigPacket { reason : reason().to_nbt() }); },
-            RealStage::Play   => { let _ = self.send_packet_play(DisconnectS2CPlayPacket { reason : reason().to_nbt() }); }
+            RealStage::Login  => { unsafe { let _ = self.send_packet_nokick(packet::SetStage::NoSet, LoginDisconnectS2CLoginPacket { reason : reason().to_json() }); } },
+            RealStage::Config => { unsafe { let _ = self.send_packet_nokick(packet::SetStage::Config, DisconnectS2CConfigPacket { reason : reason().to_nbt() }); } },
+            RealStage::Play   => { unsafe { let _ = self.send_packet_nokick(packet::SetStage::Play, DisconnectS2CPlayPacket { reason : reason().to_nbt() }); } }
         }
     }
 
@@ -226,37 +252,39 @@ pub(crate) async fn run_listener(
     let listener = TcpListener::bind(&**listen_addrs).await?;
     pass!("Started game server on {}", listen_addrs);
     loop {
-        let (stream, peer_addr,) = listener.accept().await?;
-        ACTIVE_CONNS.fetch_add(1, AtomicOrdering::Relaxed);
-        debug!("Incoming connection from {}", peer_addr);
-        let (read_stream, write_stream,) = stream.into_split();
-        let (write_sender, write_receiver,) = mpsc::unbounded_channel();
-        let (stage_sender, stage_receiver,) = mpsc::unbounded_channel();
-        let (close_sender, close_receiver,) = oneshot::channel();
-        AsyncWorld.spawn_bundle((
-            Connection {
-                peer_addr,
-                read_stream,
-                write_sender,
-                stage_sender,
-                close_receiver,
-                writer_task  : AsyncWorld.spawn_task(packet::PacketWriterTask {
+        if let Some(result) = task::timeout(Duration::from_secs(1), listener.accept()).await {
+            let (stream, peer_addr,) = result?;
+            ACTIVE_CONNS.fetch_add(1, AtomicOrdering::Relaxed);
+            debug!("Incoming connection from {}", peer_addr);
+            stream.set_nodelay(true).unwrap();
+            let (write_sender, write_receiver,) = channel::unbounded();
+            let (stage_sender, stage_receiver,) = channel::unbounded();
+            let (close_sender, close_receiver,) = channel::bounded(1);
+            AsyncWorld.spawn_bundle((
+                Connection {
                     peer_addr,
-                    current_stage  : packet::CurrentStage::Startup,
-                    write_receiver,
-                    stage_receiver,
-                    close_sender,
-                    stream         : write_stream,
-                    send_timeout   : Duration::from_millis(250)
-                }.run()),
-                data_queue   : VecDeque::new(),
-                packet_proc  : PacketProcessing::NONE,
-                packet_index : 0,
-                real_stage   : RealStage::Handshake,
-                closing      : false
-            },
-            handshake::ConnStateHandshake,
-        ));
+                    read_stream  : stream.clone(),
+                    write_sender,
+                    stage_sender,
+                    close_receiver,
+                    writer_task  : AsyncWorld.spawn_task(packet::PacketWriterTask {
+                        peer_addr,
+                        current_stage  : packet::CurrentStage::Startup,
+                        write_receiver,
+                        stage_receiver,
+                        close_sender,
+                        stream,
+                        send_timeout   : Duration::from_millis(1000)
+                    }.run()),
+                    data_queue   : VecDeque::new(),
+                    packet_proc  : PacketProcessing::NONE,
+                    packet_index : 0,
+                    real_stage   : RealStage::Handshake,
+                    closing      : false
+                },
+                handshake::ConnStateHandshake,
+            ));
+        }
     }
 }
 
@@ -265,12 +293,16 @@ pub(crate) fn read_conn_streams(
 ) {
     for (mut conn,) in &mut q_conns {
         let mut buf = [0u8; 128];
-        match (conn.read_stream.try_read(&mut buf)) {
-            Ok(0) => {
+        let mut m = ManuallyPoll::new(conn.read_stream.read(&mut buf));
+        let poll = m.poll();
+        drop(m);
+        match (poll) {
+            Poll::Pending => { },
+            Poll::Ready(Ok(0)) => {
                 // Disconnected.
                 conn.close();
             },
-            Ok(count) => {
+            Poll::Ready(Ok(count)) => {
                 conn.data_queue.reserve(count);
                 for b1 in &buf[..count] {
                     if let Ok(b) = conn.packet_proc.secret_cipher.decrypt_u8(*b1) {
@@ -281,8 +313,8 @@ pub(crate) fn read_conn_streams(
                     }
                 }
             },
-            Err(err) if (err.kind() == io::ErrorKind::WouldBlock) => { },
-            Err(err) => {
+            Poll::Ready(Err(err)) if (err.kind() == io::ErrorKind::WouldBlock) => { },
+            Poll::Ready(Err(err)) => {
                 error!("Failed to read packet from peer {}", err);
                 conn.kick(&format!("Bad packet: {err}"));
             }
@@ -345,20 +377,20 @@ pub(crate) fn close_conns(
     for (entity, mut conn, player,) in &mut q_conns {
         if (conn.closing) {
             if let Some(mut player) = player {
-                info!("Player {} ({}) disconnected.", player.username(), player.uuid());
+                info!("Player {} ({}) disconnected", player.username(), player.uuid());
                 ew_left.write(PlayerLeft {
                     uuid     : player.uuid,
                     username : mem::take(&mut player.username)
                 });
             }
-            debug!("Peer {} disconnected.", conn.peer_addr);
+            debug!("Peer {} disconnected", conn.peer_addr);
             cmds.entity(entity).despawn();
             ACTIVE_CONNS.fetch_sub(1, AtomicOrdering::Relaxed);
         }
         match (conn.close_receiver.try_recv()) {
             Ok(reason) => { conn.kick(&reason); },
-            Err(oneshot::TryRecvError::Empty) => { },
-            Err(oneshot::TryRecvError::Closed) => { conn.close(); }
+            Err(channel::TryRecvError::Empty) => { },
+            Err(channel::TryRecvError::Closed) => { conn.close(); }
         }
     }
 }

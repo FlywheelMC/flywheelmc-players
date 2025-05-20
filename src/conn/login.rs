@@ -40,9 +40,11 @@ use protocol::packet::s2c::play::{
     LoginS2CPlayPacket,
     AddEntityS2CPlayPacket,
     PlayerInfoUpdateS2CPlayPacket,
+    RespawnS2CPlayPacket,
     GameEventS2CPlayPacket,
     Gamemode,
     PlayerActionEntry,
+    RespawnDataKept,
     GameEvent
 };
 use protocol::packet::processing::{
@@ -180,13 +182,13 @@ pub(crate) fn handle_state(
                         let secret_cipher_key = conn.packet_proc.secret_cipher.key().unwrap().to_vec();
                         let public_key        = public_key.clone();
                         ConnStateLogin::CheckingMojauth { fut : ManuallyPoll::new(async move {
-                            MojAuth::start(
+                            smol::unblock(move || MojAuth::start_blocking(
                                 None,
                                 username,
                                 server_id,
                                 &secret_cipher_key,
                                 &public_key
-                            ).await
+                            )).await
                         }) }
                     } else {
                         let mojauth = MojAuth::offline(mem::take(username));
@@ -232,7 +234,7 @@ pub(crate) fn handle_state(
                 if let Some(C2SLoginPackets::LoginAcknowledged(_)) = conn.read_packet() {
                     conn.real_stage = RealStage::Config;
 
-                    if (conn.stage_sender.send(NextStage::Config).is_err()) {
+                    if (conn.stage_sender.force_send(NextStage::Config).is_err()) {
                         error!("Failed to switch peer {} to config stage", conn.peer_addr);
                         conn.kick("Could not switch to config stage");
                         continue;
@@ -265,7 +267,13 @@ pub(crate) fn handle_state(
                             props    : props.clone()
                         },
                         world::ChunkCentre(Dirty::new_dirty(Vec2::<i32>::ZERO)),
-                        world::ViewDistance(Ordered::new(NonZeroU8::MIN))
+                        world::ViewDistance(Ordered::new(NonZeroU8::MIN)),
+                        world::World {
+                            dim_id       : r_default_dim.0.clone(),
+                            dim_type     : r_default_dim.1.clone(),
+                            chunks       : BTreeMap::new(),
+                            newly_loaded : Vec::new()
+                        }
                     ));
 
                     if (unsafe { conn.send_packet_noset(FinishConfigurationS2CConfigPacket) }.is_err()) {
@@ -296,7 +304,7 @@ pub(crate) fn handle_state(
                             ));
                         ew_joined.write(PlayerJoined { entity });
 
-                        if (conn.stage_sender.send(NextStage::Play).is_err()) {
+                        if (conn.stage_sender.force_send(NextStage::Play).is_err()) {
                             error!("Failed to switch peer {} to play stage", conn.peer_addr);
                             conn.kick("Could not switch to play stage");
                             continue;
@@ -316,7 +324,7 @@ pub(crate) fn handle_state(
                             dim                  : RegEntry::new_unchecked(0),
                             dim_name             : r_default_dim.0.clone(),
                             seed                 : 0,
-                            gamemode             : Gamemode::Adventure,
+                            gamemode             : Gamemode::Creative,
                             old_gamemode         : Gamemode::None,
                             is_debug             : false,
                             is_flat              : false,
@@ -353,6 +361,23 @@ pub(crate) fn handle_state(
                             vel_x    : 0,
                             vel_y    : 0,
                             vel_z    : 0
+                        }) }.is_err()) { continue; }
+
+                        if (unsafe { conn.send_packet_noset(RespawnS2CPlayPacket {
+                            dim                  : RegEntry::new_unchecked(0),
+                            dim_name             : r_default_dim.0.clone(),
+                            seed                 : 0,
+                            gamemode             : Gamemode::Creative,
+                            prev_gamemode        : Gamemode::None,
+                            is_debug             : false,
+                            is_flat              : false,
+                            death_loc            : None,
+                            portal_cooldown      : 0.into(),
+                            sea_level            : 0.into(),
+                            data_kept            : RespawnDataKept {
+                                keep_attributes : false,
+                                keep_metadata   : false
+                            }
                         }) }.is_err()) { continue; }
 
                         if (unsafe { conn.send_packet_noset(GameEventS2CPlayPacket {

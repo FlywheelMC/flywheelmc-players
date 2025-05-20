@@ -22,7 +22,7 @@ pub(crate) fn handle_state(
                 if let Some(packet) = conn.read_packet() {
                     if let C2SConfigPackets::FinishConfiguration(_) = packet {
                         state.stage = NextStage::Play;
-                        if (conn.stage_sender.send(NextStage::Play).is_err()) {
+                        if (conn.stage_sender.force_send(NextStage::Play).is_err()) {
                             error!("Failed to switch peer {} to play stage", conn.peer_addr);
                             conn.kick("Could not switch to play stage");
                         }
@@ -41,7 +41,7 @@ pub(crate) fn handle_state(
                 if let Some(packet) = conn.read_packet() {
                     if let C2SPlayPackets::ConfigurationAcknowledged(_) = packet {
                         state.stage = NextStage::Config;
-                        if (conn.stage_sender.send(NextStage::Config).is_err()) {
+                        if (conn.stage_sender.force_send(NextStage::Config).is_err()) {
                             error!("Failed to switch peer {} to config stage", conn.peer_addr);
                             conn.kick("Could not switch to config stage");
                         }

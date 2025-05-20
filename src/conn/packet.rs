@@ -52,10 +52,10 @@ pub(crate) enum NextStage {
 pub(crate) struct PacketWriterTask {
     pub(crate) peer_addr      : SocketAddr,
     pub(crate) current_stage  : CurrentStage,
-    pub(crate) write_receiver : mpsc::UnboundedReceiver<(ShortName<'static>, SetStage, Vec<u8>,)>,
-    pub(crate) stage_receiver : mpsc::UnboundedReceiver<NextStage>,
-    pub(crate) close_sender   : oneshot::Sender<Cow<'static, str>>,
-    pub(crate) stream         : OwnedWriteHalf,
+    pub(crate) write_receiver : channel::Receiver<(ShortName<'static>, SetStage, Vec<u8>,)>,
+    pub(crate) stage_receiver : channel::Receiver<NextStage>,
+    pub(crate) close_sender   : channel::Sender<Cow<'static, str>>,
+    pub(crate) stream         : TcpStream,
     pub(crate) send_timeout   : Duration
 }
 
@@ -70,7 +70,7 @@ impl PacketWriterTask {
         loop {
             match (self.write_receiver.try_recv()) {
                 Ok((packet_type, set_stage, packet,)) => {
-                    trace!("Sending packet {} to peer {}...", packet_type, self.peer_addr);
+                    trace!("Sending packet ({}) {} to peer {}...", packet.len(), packet_type, self.peer_addr);
                     match (set_stage) {
                         SetStage::NoSet  => { },
                         SetStage::Config => { match (self.current_stage) {
@@ -89,30 +89,33 @@ impl PacketWriterTask {
                             CurrentStage::Play => { }
                         } }
                     }
-                    match (task::timeout(self.send_timeout, self.stream.write_all(&packet)).await) {
-                        Ok(Ok(_)) => { },
-                        Ok(Err(err)) => {
+                    match (task::timeout(self.send_timeout, async {
+                        self.stream.write_all(&packet).await?;
+                        self.stream.flush().await
+                    }).await) {
+                        Some(Ok(_)) => { },
+                        Some(Err(err)) => {
                             error!("Failed to send packet to peer {}: {}", self.peer_addr, err);
                             let _ = self.close_sender.send(Cow::Owned(err.to_string()));
                             return Err(());
                         }
-                        Err(_) => {
+                        None => {
                             error!("Failed to send packet to peer {}: {}", self.peer_addr, io::ErrorKind::TimedOut);
                             let _ = self.close_sender.send(Cow::Borrowed("timed out"));
                             return Err(());
                         }
                     }
                 },
-                Err(mpsc::TryRecvError::Empty) => { },
-                Err(mpsc::TryRecvError::Disconnected) => { return Err(()); }
+                Err(channel::TryRecvError::Empty) => { },
+                Err(channel::TryRecvError::Closed) => { return Err(()); }
             }
             match (self.stage_receiver.try_recv()) {
                 Ok(stage) => { self.current_stage =  match (stage) {
                     NextStage::Config => CurrentStage::Config,
                     NextStage::Play   => CurrentStage::Play,
                 }; },
-                Err(mpsc::TryRecvError::Empty) => { },
-                Err(mpsc::TryRecvError::Disconnected) => { return Err(()); }
+                Err(channel::TryRecvError::Empty) => { },
+                Err(channel::TryRecvError::Closed) => { return Err(()); }
             }
             task::yield_now().await;
         }
