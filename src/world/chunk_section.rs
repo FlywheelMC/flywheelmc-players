@@ -62,8 +62,9 @@ impl ChunkSection {
     pub(crate) fn ptc_chunk_section(&self) -> PtcChunkSection {
         let mut block_count = 0;
         let run_len = u16::from_ne_bytes([self.data[0], self.data[1]]);
-        let block_states = if (run_len == 4096 && false) {
+        let block_states = if (run_len == 4096) {
             let (entry, _,) = Var32::decode_iter(&mut self.data[2..].iter().cloned()).unwrap();
+            if (entry.as_i32() != 0) { block_count = 4096; }
             PalettedContainer {
                 bits_per_entry : 0,
                 format         : PaletteFormat::SingleValued { entry : unsafe { RegEntry::new_unchecked(entry.as_i32() as u32) } }
@@ -77,7 +78,6 @@ impl ChunkSection {
                 max_id = max_id.max(id);
                 data[i] = block;
             }
-            data[0] = unsafe { RegEntry::new_unchecked(1) };
             PalettedContainer {
                 bits_per_entry : 15,
                 format         : PaletteFormat::Direct { data }
