@@ -90,10 +90,7 @@ impl PacketWriterTask {
                             CurrentStage::Play => { }
                         } }
                     }
-                    match (task::timeout(self.send_timeout, async {
-                        self.stream.write_all(&packet).await?;
-                        self.stream.flush().await
-                    }).await) {
+                    match (task::timeout(self.send_timeout, self.stream.write_all(&packet)).await) {
                         Some(Ok(_)) => { },
                         Some(Err(err)) => {
                             error!("Failed to send packet to peer {}: {}", self.peer_addr, err);

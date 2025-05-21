@@ -42,10 +42,12 @@ use protocol::packet::s2c::play::{
     PlayerInfoUpdateS2CPlayPacket,
     RespawnS2CPlayPacket,
     GameEventS2CPlayPacket,
+    PlayerPositionS2CPlayPacket,
     Gamemode,
     PlayerActionEntry,
     RespawnDataKept,
-    GameEvent
+    GameEvent,
+    TeleportFlags
 };
 use protocol::packet::processing::{
     CompressionMode,
@@ -272,7 +274,7 @@ pub(crate) fn handle_state(
                             dim_id       : r_default_dim.0.clone(),
                             dim_type     : r_default_dim.1.clone(),
                             chunks       : BTreeMap::new(),
-                            newly_loaded : Vec::new()
+                            ready_chunks : VecDeque::new()
                         }
                     ));
 
@@ -327,7 +329,7 @@ pub(crate) fn handle_state(
                             gamemode             : Gamemode::Creative,
                             old_gamemode         : Gamemode::None,
                             is_debug             : false,
-                            is_flat              : false,
+                            is_flat              : true,
                             death_loc            : None,
                             portal_cooldown      : 0.into(),
                             sea_level            : 0.into(),
@@ -370,7 +372,7 @@ pub(crate) fn handle_state(
                             gamemode             : Gamemode::Creative,
                             prev_gamemode        : Gamemode::None,
                             is_debug             : false,
-                            is_flat              : false,
+                            is_flat              : true,
                             death_loc            : None,
                             portal_cooldown      : 0.into(),
                             sea_level            : 0.into(),
@@ -383,6 +385,29 @@ pub(crate) fn handle_state(
                         if (unsafe { conn.send_packet_noset(GameEventS2CPlayPacket {
                             event : GameEvent::WaitForChunks,
                             value : 0.0
+                        }) }.is_err()) { continue; }
+
+                        if (unsafe { conn.send_packet_noset(PlayerPositionS2CPlayPacket {
+                            teleport_id : 1.into(),
+                            x           : 0.5,
+                            y           : 360.0,
+                            z           : 0.5,
+                            vx          : 0.0,
+                            vy          : 0.0,
+                            vz          : 0.0,
+                            adyaw_deg   : 0.0,
+                            adpitch_deg : 0.0,
+                            flags       : TeleportFlags {
+                                relative_x      : false,
+                                relative_y      : false,
+                                relative_z      : false,
+                                relative_pitch  : false,
+                                relative_yaw    : false,
+                                relative_vx     : false,
+                                relative_vy     : false,
+                                relative_vz     : false,
+                                rotate_velocity : false
+                            }
                         }) }.is_err()) { continue; }
 
                     } else {

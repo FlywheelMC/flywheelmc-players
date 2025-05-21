@@ -276,7 +276,7 @@ pub(crate) async fn run_listener(
                         stage_receiver,
                         close_sender,
                         stream,
-                        send_timeout   : Duration::from_millis(1000)
+                        send_timeout   : Duration::from_millis(250)
                     }.run()),
                     data_queue   : VecDeque::new(),
                     packet_proc  : PacketProcessing::NONE,

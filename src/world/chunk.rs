@@ -4,7 +4,9 @@ use protocol::value::ChunkSectionData as PtcChunkSectionData;
 
 
 pub struct Chunk {
-    pub(super) sections : Vec<ChunkSection>
+    pub(super) sections : Vec<ChunkSection>,
+    pub(super) ready    : bool,
+    pub(super) loaded   : bool
 }
 
 

@@ -14,7 +14,8 @@ use protocol::packet::c2s::play::{
 use protocol::packet::s2c::play::{
     SetChunkCacheCenterS2CPlayPacket,
     SetChunkCacheRadiusS2CPlayPacket,
-    LevelChunkWithLightS2CPlayPacket
+    LevelChunkWithLightS2CPlayPacket,
+    LightMask
 };
 use protocol::value::{ Identifier, BlockState, DimType, Nbt };
 use protocol::registry::RegEntry;
@@ -50,7 +51,7 @@ pub struct World {
     pub(crate) dim_id       : Identifier,
     pub(crate) dim_type     : DimType,
     pub(crate) chunks       : BTreeMap<Vec2<i32>, Chunk>,
-    pub(crate) newly_loaded : Vec<Vec2<i32>>
+    pub(crate) ready_chunks : VecDeque<Vec2<i32>>
 }
 
 #[derive(Component)]
@@ -96,48 +97,10 @@ pub(crate) fn load_chunks(
     mut q_conns : Query<(Entity, &mut Connection, &mut World, &ChunkCentre, &ViewDistance), (With<ConnStatePlay>, With<PlayerInWorld>,)>,
     mut ew_load : EventWriter<WorldChunkLoading>
 ) {
-    for (_, mut conn, mut world, _, _,) in &mut q_conns {
-        let newly_loaded = mem::take(&mut world.newly_loaded);
-        for pos in newly_loaded {
-            if let Some(chunk) = world.chunks.get_mut(&pos) {
-                let data = chunk.ptc_chunk_section_data();
-                for section in &mut chunk.sections {
-                    section.clear_dirty();
-                }
-                let _ = conn.send_packet_play(LevelChunkWithLightS2CPlayPacket {
-                    chunk_x                : pos.x,
-                    chunk_z                : pos.y,
-                    data,
-                    heightmaps             : Nbt::new(),
-                    block_entities         : Vec::new().into(),
-                    sky_light_mask         : Vec::new().into(),
-                    block_light_mask       : Vec::new().into(),
-                    empty_sky_light_mask   : Vec::new().into(),
-                    empty_block_light_mask : Vec::new().into(),
-                    sky_light_array        : Vec::new().into(),
-                    block_light_array      : Vec::new().into()
-                });
-            }
-        }
-    }
-
-    for (entity, mut conn, mut world, chunk_centre, view_dist) in &mut q_conns {
-
-        // TODO: Unload out-of-range chunks.
-
-        // Update loaded chunks.
-        for (cpos, chunk,) in &mut world.chunks {
-            for (y, section) in chunk.sections.iter_mut().enumerate() {
-                if let Some(packet) = section.ptc_update_section([cpos.x, y as i32, cpos.y,]) {
-                    warn!("{} {} {}", cpos.x, y, cpos.y);
-                    section.clear_dirty();
-                    let _ = conn.send_packet_play(packet);
-                }
-            }
-        }
+    for (entity, mut conn, mut world, chunk_centre, view_dist,) in &mut q_conns {
 
         // Queue new chunks for load.
-        try_load_chunk(entity, &conn, &mut ew_load, &mut world, *chunk_centre.0);
+        try_load_chunk(entity, &mut ew_load, &conn, &mut world, *chunk_centre.0);
         for radius in 1..=(view_dist.0.get() as i32) {
             let edge_len = 2 * radius;
             for corner_cx in [-1i32, 1] {
@@ -147,7 +110,7 @@ pub(crate) fn load_chunks(
                     for i in 0..edge_len {
                         let offset_cx = (radius * corner_cx) + (i * shift_cx);
                         let offset_cz = (radius * corner_cz) + (i * shift_cz);
-                        try_load_chunk(entity, &conn, &mut ew_load, &mut world, Vec2::new(
+                        try_load_chunk(entity, &mut ew_load, &conn, &mut world, Vec2::new(
                             chunk_centre.0.x + offset_cx,
                             chunk_centre.0.y + offset_cz
                         ));
@@ -156,33 +119,72 @@ pub(crate) fn load_chunks(
             }
         }
 
+        // Load ready chunks.
+        if let Some(pos) = world.ready_chunks.pop_front()
+            && let Some(chunk) = world.chunks.get_mut(&pos)
+        {
+            let data = chunk.ptc_chunk_section_data();
+            for section in &mut chunk.sections {
+                section.clear_dirty();
+            }
+            let _ = conn.send_packet_play(LevelChunkWithLightS2CPlayPacket {
+                chunk_x                : pos.x,
+                chunk_z                : pos.y,
+                data,
+                heightmaps             : Nbt::new(),
+                block_entities         : Vec::new().into(),
+                sky_light_mask         : vec![u64::MAX; (chunk.sections.len() + 2).div_ceil(64)].into(),
+                block_light_mask       : Vec::new().into(),
+                empty_sky_light_mask   : Vec::new().into(),
+                empty_block_light_mask : Vec::new().into(),
+                sky_light_array        : vec![LightMask { light_array : vec![u8::MAX; 2048].into() }; (chunk.sections.len() + 2)].into(),
+                block_light_array      : Vec::new().into()
+            });
+            chunk.loaded = true;
+        }
+
+        // Update loaded chunks.
+        'update_chunks : for (cpos, chunk,) in &mut world.chunks {
+            if (chunk.ready && chunk.loaded) {
+                for (y, section) in chunk.sections.iter_mut().enumerate() {
+                    if let Some(packet) = section.ptc_update_section([cpos.x, y as i32, cpos.y,]) {
+                        section.clear_dirty();
+                        let _ = conn.send_packet_play(packet);
+                        break 'update_chunks;
+                    }
+                }
+            }
+        }
+
+        // TODO: Unload out-of-range chunks.
+
     }
 }
 fn try_load_chunk(
     entity  : Entity,
-    conn    : &Connection,
     ew_load : &mut EventWriter<WorldChunkLoading>,
+    conn    : &Connection,
     world   : &mut World,
     pos     : Vec2<i32>
 ) {
-    if (! world.chunks.contains_key(&pos)) {
-        world.chunks.insert(pos, Chunk {
-            sections : {
-                let     section  = ChunkSection::empty();
-                let     count    = (world.dim_type.height / 16).max(1);
-                let mut sections = Vec::with_capacity(count as usize);
-                for _ in 0..(count.saturating_sub(1)) {
-                    sections.push(section.clone());
-                }
-                sections.push(section);
-                sections
+    if (world.chunks.contains_key(&pos)) { return; }
+    world.chunks.insert(pos, Chunk {
+        sections : {
+            let     section  = ChunkSection::empty();
+            let     count    = (world.dim_type.height / 16).max(1);
+            let mut sections = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                sections.push(section.clone());
             }
-        });
-        world.newly_loaded.push(pos);
+            sections.push(section);
+            sections
+        },
+        ready  : false,
+        loaded : false
+    });
 
-        trace!("Loading chunk <{}, {}> for peer {}", pos.x, pos.y, conn.peer_addr());
-        ew_load.write(WorldChunkLoading { entity, pos });
-    }
+    trace!("Loading chunk <{}, {}> for peer {}", pos.x, pos.y, conn.peer_addr());
+    ew_load.write(WorldChunkLoading { entity, pos });
 }
 
 // TODO: Unload chunks
