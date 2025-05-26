@@ -53,7 +53,7 @@ pub(crate) fn handle_actions(
                     let mut batch = SetBlockBatch::new(&mut world);
 
                     for (block_pos, block_id, states,) in blocks {
-                        let chunk_pos = Vec2::new((block_pos.x / 16) as i32, (block_pos.z / 16) as i32);
+                        let chunk_pos = Vec2::new(block_pos.x.div_floor(16) as i32, block_pos.z.div_floor(16) as i32);
                         if (batch.is_chunk_loaded(chunk_pos)) {
                             let block_id = Identifier::from(block_id);
                             if let Some(mut block_state) = BlockState::default_for(&block_id) {
